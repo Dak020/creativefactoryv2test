@@ -184,8 +184,10 @@ export async function publishVideo(input: {
   if (!size) throw new Error("The rendered video file is empty.");
 
   const info = await creatorInfo(input.accessToken);
-  const privacy = info.privacyOptions.includes("PUBLIC_TO_EVERYONE")
-    ? "PUBLIC_TO_EVERYONE"
+  // Unaudited/sandbox clients may only post privately: TikTok requires SELF_ONLY.
+  // Switch to PUBLIC_TO_EVERYONE once the app passes TikTok's audit.
+  const privacy = info.privacyOptions.includes("SELF_ONLY")
+    ? "SELF_ONLY"
     : (info.privacyOptions[0] ?? "SELF_ONLY");
 
   const init = await apiPost("/post/publish/video/init/", input.accessToken, {
