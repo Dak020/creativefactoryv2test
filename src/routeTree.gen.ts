@@ -28,6 +28,7 @@ import { Route as AuthIndexRouteImport } from './routes/auth.index'
 import { Route as AuthSplatRouteImport } from './routes/auth.$'
 import { Route as AuthenticatedProjectsIndexRouteImport } from './routes/_authenticated/projects.index'
 import { Route as AuthenticatedProjectsProjectIdRouteImport } from './routes/_authenticated/projects.$projectId'
+import { Route as OauthTiktokCallbackRouteImport } from './routes/oauth.tiktok.callback'
 import { Route as OauthUploadPostReturnRouteImport } from './routes/oauth.upload-post.return'
 
 const IndexRoute = IndexRouteImport.update({
@@ -127,6 +128,11 @@ const AuthenticatedProjectsProjectIdRoute =
     path: '/projects/$projectId',
     getParentRoute: () => AuthenticatedRouteRoute,
   } as any)
+const OauthTiktokCallbackRoute = OauthTiktokCallbackRouteImport.update({
+  id: '/oauth/tiktok/callback',
+  path: '/oauth/tiktok/callback',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const OauthUploadPostReturnRoute = OauthUploadPostReturnRouteImport.update({
   id: '/oauth/upload-post/return',
   path: '/oauth/upload-post/return',
@@ -151,6 +157,7 @@ export interface FileRoutesByFullPath {
   '/auth/$': typeof AuthSplatRoute
   '/auth/': typeof AuthIndexRoute
   '/projects/$projectId': typeof AuthenticatedProjectsProjectIdRoute
+  '/oauth/tiktok/callback': typeof OauthTiktokCallbackRoute
   '/oauth/upload-post/return': typeof OauthUploadPostReturnRoute
   '/projects/': typeof AuthenticatedProjectsIndexRoute
 }
@@ -171,6 +178,7 @@ export interface FileRoutesByTo {
   '/auth/$': typeof AuthSplatRoute
   '/auth': typeof AuthIndexRoute
   '/projects/$projectId': typeof AuthenticatedProjectsProjectIdRoute
+  '/oauth/tiktok/callback': typeof OauthTiktokCallbackRoute
   '/oauth/upload-post/return': typeof OauthUploadPostReturnRoute
   '/projects': typeof AuthenticatedProjectsIndexRoute
 }
@@ -194,6 +202,7 @@ export interface FileRoutesById {
   '/auth/$': typeof AuthSplatRoute
   '/auth/': typeof AuthIndexRoute
   '/_authenticated/projects/$projectId': typeof AuthenticatedProjectsProjectIdRoute
+  '/oauth/tiktok/callback': typeof OauthTiktokCallbackRoute
   '/oauth/upload-post/return': typeof OauthUploadPostReturnRoute
   '/_authenticated/projects/': typeof AuthenticatedProjectsIndexRoute
 }
@@ -217,6 +226,7 @@ export interface FileRouteTypes {
     | '/auth/$'
     | '/auth/'
     | '/projects/$projectId'
+    | '/oauth/tiktok/callback'
     | '/oauth/upload-post/return'
     | '/projects/'
   fileRoutesByTo: FileRoutesByTo
@@ -237,6 +247,7 @@ export interface FileRouteTypes {
     | '/auth/$'
     | '/auth'
     | '/projects/$projectId'
+    | '/oauth/tiktok/callback'
     | '/oauth/upload-post/return'
     | '/projects'
   id:
@@ -259,6 +270,7 @@ export interface FileRouteTypes {
     | '/auth/$'
     | '/auth/'
     | '/_authenticated/projects/$projectId'
+    | '/oauth/tiktok/callback'
     | '/oauth/upload-post/return'
     | '/_authenticated/projects/'
   fileRoutesById: FileRoutesById
@@ -270,6 +282,7 @@ export interface RootRouteChildren {
   PrivacyRoute: typeof PrivacyRoute
   ResetPasswordRoute: typeof ResetPasswordRoute
   TermsRoute: typeof TermsRoute
+  OauthTiktokCallbackRoute: typeof OauthTiktokCallbackRoute
   OauthUploadPostReturnRoute: typeof OauthUploadPostReturnRoute
 }
 
@@ -408,6 +421,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AuthenticatedProjectsProjectIdRouteImport
       parentRoute: typeof AuthenticatedRouteRoute
     }
+    '/oauth/tiktok/callback': {
+      id: '/oauth/tiktok/callback'
+      path: '/oauth/tiktok/callback'
+      fullPath: '/oauth/tiktok/callback'
+      preLoaderRoute: typeof OauthTiktokCallbackRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/oauth/upload-post/return': {
       id: '/oauth/upload-post/return'
       path: '/oauth/upload-post/return'
@@ -468,6 +488,7 @@ const rootRouteChildren: RootRouteChildren = {
   PrivacyRoute: PrivacyRoute,
   ResetPasswordRoute: ResetPasswordRoute,
   TermsRoute: TermsRoute,
+  OauthTiktokCallbackRoute: OauthTiktokCallbackRoute,
   OauthUploadPostReturnRoute: OauthUploadPostReturnRoute,
 }
 export const routeTree = rootRouteImport
