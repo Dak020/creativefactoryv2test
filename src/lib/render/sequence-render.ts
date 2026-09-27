@@ -22,7 +22,6 @@ import {
   type HookPlacement,
 } from "./browser-render";
 
-
 export type SequenceSegment = {
   /** Playable URL for this segment's source clip. */
   url: string;
@@ -93,8 +92,6 @@ async function prepareVideo(seg: SequenceSegment, withAudio: boolean, signal?: A
   }
 }
 
-
-
 export async function renderSequence(opts: SequenceRenderOptions): Promise<BrowserRenderResult> {
   const { segments, width, height, text, withAudio, signal } = opts;
   if (segments.length === 0) throw new Error("No segments to render.");
@@ -122,7 +119,10 @@ export async function renderSequence(opts: SequenceRenderOptions): Promise<Brows
   let drawSize = overlay.size;
   let font = fontFor(drawSize);
   ctx.font = font;
-  while (Math.max(...overlay.lines.map((l) => ctx.measureText(l).width), 0) > hardMaxWidth && drawSize > 20) {
+  while (
+    Math.max(...overlay.lines.map((l) => ctx.measureText(l).width), 0) > hardMaxWidth &&
+    drawSize > 20
+  ) {
     drawSize -= 2;
     font = fontFor(drawSize);
     ctx.font = font;
@@ -130,8 +130,12 @@ export async function renderSequence(opts: SequenceRenderOptions): Promise<Brows
   const drawLineHeight = Math.round(drawSize * 1.16);
   const drawLines = overlay.lines.map((line) => {
     const m = ctx.measureText(line);
-    const inkLeft = Number.isFinite(m.actualBoundingBoxLeft) ? m.actualBoundingBoxLeft : m.width / 2;
-    const inkRight = Number.isFinite(m.actualBoundingBoxRight) ? m.actualBoundingBoxRight : m.width / 2;
+    const inkLeft = Number.isFinite(m.actualBoundingBoxLeft)
+      ? m.actualBoundingBoxLeft
+      : m.width / 2;
+    const inkRight = Number.isFinite(m.actualBoundingBoxRight)
+      ? m.actualBoundingBoxRight
+      : m.width / 2;
     return { text: line, x: centerX - (inkRight - inkLeft) / 2 };
   });
 
@@ -145,7 +149,6 @@ export async function renderSequence(opts: SequenceRenderOptions): Promise<Brows
 
   // Real total is only known after the clips report their true durations
   // (see prepareVideo) — computed below from the clamped segment lengths.
-
 
   // Load every segment's video up front so cuts are instant (no black gap
   // between them) and so all audio sources can be wired before recording
@@ -168,8 +171,24 @@ export async function renderSequence(opts: SequenceRenderOptions): Promise<Brows
 
   throwIfAborted(signal);
 
-  if (withAudio) {
-    for (const p of prepared) attachAudioTrack(p.video, captureStream);
+  // Same mixing approach as the single-clip renderer: every prepared clip's
+  // own audio (when kept) plus the chosen soundtrack are mixed into ONE
+  // recorded track, all wired up before the recorder starts — a track added
+  // to the stream after MediaRecorder.start() is never captured.
+  const soundtrack = opts.soundtrackUrl
+    ? await prepareSoundtrack(opts.soundtrackUrl, signal)
+    : null;
+  if (withAudio || soundtrack) {
+    const audioSources: { el: HTMLMediaElement; volume?: number }[] = [];
+    if (withAudio) {
+      for (const p of prepared) {
+        audioSources.push({ el: p.video, volume: soundtrack ? 0.35 : 1 });
+      }
+    }
+    if (soundtrack) {
+      audioSources.push({ el: soundtrack, volume: opts.soundtrackVolume ?? 1 });
+    }
+    attachAudioSources(captureStream, audioSources);
   }
 
   const recorder = new MediaRecorder(captureStream, { mimeType, videoBitsPerSecond: 6_000_000 });
@@ -236,9 +255,12 @@ export async function renderSequence(opts: SequenceRenderOptions): Promise<Brows
   currentVideo.currentTime = prepared[0]!.start;
   await waitFor(currentVideo, "seeked", { signal, timeoutMs: 15_000 });
 
-
   drawFrame();
   recorder.start(200);
+  if (soundtrack) {
+    soundtrack.currentTime = 0;
+    await soundtrack.play().catch(() => undefined);
+  }
 
   try {
     for (let index = 0; index < prepared.length; index++) {
@@ -344,7 +366,8 @@ export async function renderSequence(opts: SequenceRenderOptions): Promise<Brows
           const reachedCut = video.ended || video.currentTime >= end - 0.03;
           drawFrame();
           const segElapsed = (performance.now() - segStartedAt) / 1000;
-          const pct = ((elapsedBefore + Math.min(segElapsed, outputDuration)) / totalDuration) * 100;
+          const pct =
+            ((elapsedBefore + Math.min(segElapsed, outputDuration)) / totalDuration) * 100;
           opts.onProgress?.(Math.min(99, Math.round(pct)));
           if (reachedCut || segElapsed >= outputDuration) {
             if (!video.paused) video.pause();
@@ -358,7 +381,6 @@ export async function renderSequence(opts: SequenceRenderOptions): Promise<Brows
             });
             finish();
           }
-
         };
         const FALLBACK_GAP_MS = 120;
         const timer = setInterval(() => {
@@ -391,6 +413,10 @@ export async function renderSequence(opts: SequenceRenderOptions): Promise<Brows
       p.video.pause();
       p.video.src = "";
     });
+    if (soundtrack) {
+      soundtrack.pause();
+      soundtrack.removeAttribute("src");
+    }
     throw e;
   }
 
@@ -412,6 +438,10 @@ export async function renderSequence(opts: SequenceRenderOptions): Promise<Brows
     p.video.pause();
     p.video.src = "";
   });
+  if (soundtrack) {
+    soundtrack.pause();
+    soundtrack.removeAttribute("src");
+  }
 
   const blob = new Blob(chunks, { type: mimeType });
   if (blob.size === 0) throw new Error("Recorder produced an empty file.");
