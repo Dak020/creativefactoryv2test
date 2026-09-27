@@ -23,10 +23,15 @@ export type BrowserRenderOptions = {
   fontSize?: number;
   /** Keep the clip's original audio in the exported file. */
   withAudio?: boolean;
+  /** Fully-resolved, CORS-readable URL of a soundtrack to bake into the export. */
+  soundtrackUrl?: string | undefined;
+  /** Soundtrack level, 0..1 (defaults to 1). */
+  soundtrackVolume?: number | undefined;
   onProgress?: (pct: number) => void;
   /** Abort the render early — used for user-initiated cancellation. */
   signal?: AbortSignal | undefined;
 };
+
 
 /** Thrown when a render is stopped via its AbortSignal, so callers can tell
  *  a user cancellation apart from a genuine render failure. */
