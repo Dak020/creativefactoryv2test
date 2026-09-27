@@ -556,6 +556,7 @@ export async function renderVariant(opts: BrowserRenderOptions): Promise<Browser
   });
 
   video.pause();
+  if (soundtrack) soundtrack.pause();
   // Flush whatever is buffered in the current timeslice so the tail of the
   // clip isn't dropped with the final partial chunk.
   if (recorder.state === "recording") recorder.requestData();
@@ -566,6 +567,8 @@ export async function renderVariant(opts: BrowserRenderOptions): Promise<Browser
   if (captureStreamToUse !== stream) stream.getTracks().forEach((t) => t.stop());
 
   video.src = "";
+  if (soundtrack) soundtrack.src = "";
+
 
   const blob = new Blob(chunks, { type: mimeType });
   if (blob.size === 0) throw new Error("Recorder produced an empty file.");
