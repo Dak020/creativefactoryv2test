@@ -41,7 +41,12 @@ export type SequenceRenderOptions = {
   text: string;
   placement?: HookPlacement;
   withAudio?: boolean;
+  /** Fully-resolved, CORS-readable URL of a soundtrack to bake into the export. */
+  soundtrackUrl?: string | undefined;
+  /** Soundtrack level, 0..1 (defaults to 1). */
+  soundtrackVolume?: number | undefined;
   onProgress?: (pct: number) => void;
+
   /** Abort the render early — used for user-initiated cancellation. Checked
    *  between segments and inside the per-segment frame loop so a cancel
    *  actually stops within a second, not at the end of the current segment. */
