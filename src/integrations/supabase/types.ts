@@ -142,6 +142,7 @@ export type Database = {
       }
       generated_videos: {
         Row: {
+          audio_id: string | null
           created_at: string
           duration: number
           hook_id: string | null
@@ -158,6 +159,7 @@ export type Database = {
           user_id: string
         }
         Insert: {
+          audio_id?: string | null
           created_at?: string
           duration?: number
           hook_id?: string | null
@@ -174,6 +176,7 @@ export type Database = {
           user_id: string
         }
         Update: {
+          audio_id?: string | null
           created_at?: string
           duration?: number
           hook_id?: string | null
@@ -190,6 +193,13 @@ export type Database = {
           user_id?: string
         }
         Relationships: [
+          {
+            foreignKeyName: "generated_videos_audio_id_fkey"
+            columns: ["audio_id"]
+            isOneToOne: false
+            referencedRelation: "trending_audios"
+            referencedColumns: ["id"]
+          },
           {
             foreignKeyName: "generated_videos_hook_id_fkey"
             columns: ["hook_id"]
@@ -848,6 +858,75 @@ export type Database = {
           token_expires_at?: string | null
           updated_at?: string
           user_id?: string
+        }
+        Relationships: []
+      }
+      trending_audios: {
+        Row: {
+          audio_url: string | null
+          author: string | null
+          cover_url: string | null
+          created_at: string
+          duration_seconds: number | null
+          external_id: string | null
+          id: string
+          is_favorite: boolean
+          last_synced_at: string | null
+          platform: string
+          region: string
+          source: string
+          source_url: string | null
+          storage_path: string | null
+          title: string
+          trend_label: string | null
+          trend_rate: number
+          updated_at: string
+          user_id: string | null
+          virality_score: number
+        }
+        Insert: {
+          audio_url?: string | null
+          author?: string | null
+          cover_url?: string | null
+          created_at?: string
+          duration_seconds?: number | null
+          external_id?: string | null
+          id?: string
+          is_favorite?: boolean
+          last_synced_at?: string | null
+          platform?: string
+          region?: string
+          source?: string
+          source_url?: string | null
+          storage_path?: string | null
+          title: string
+          trend_label?: string | null
+          trend_rate?: number
+          updated_at?: string
+          user_id?: string | null
+          virality_score?: number
+        }
+        Update: {
+          audio_url?: string | null
+          author?: string | null
+          cover_url?: string | null
+          created_at?: string
+          duration_seconds?: number | null
+          external_id?: string | null
+          id?: string
+          is_favorite?: boolean
+          last_synced_at?: string | null
+          platform?: string
+          region?: string
+          source?: string
+          source_url?: string | null
+          storage_path?: string | null
+          title?: string
+          trend_label?: string | null
+          trend_rate?: number
+          updated_at?: string
+          user_id?: string | null
+          virality_score?: number
         }
         Relationships: []
       }

@@ -23,10 +23,15 @@ export type BrowserRenderOptions = {
   fontSize?: number;
   /** Keep the clip's original audio in the exported file. */
   withAudio?: boolean;
+  /** Fully-resolved, CORS-readable URL of a soundtrack to bake into the export. */
+  soundtrackUrl?: string | undefined;
+  /** Soundtrack level, 0..1 (defaults to 1). */
+  soundtrackVolume?: number | undefined;
   onProgress?: (pct: number) => void;
   /** Abort the render early — used for user-initiated cancellation. */
   signal?: AbortSignal | undefined;
 };
+
 
 /** Thrown when a render is stopped via its AbortSignal, so callers can tell
  *  a user cancellation apart from a genuine render failure. */
@@ -63,6 +68,89 @@ export function attachAudioTrack(video: HTMLVideoElement, stream: MediaStream) {
     return null;
   }
 }
+
+/**
+ * Mix several media elements (clip audio + a chosen soundtrack) into ONE audio
+ * track on the recorded stream. Nothing is connected to ctx.destination, so the
+ * render stays silent for the person watching it happen.
+ */
+export function attachAudioSources(
+  stream: MediaStream,
+  sources: { el: HTMLMediaElement; volume?: number }[],
+) {
+  if (sources.length === 0) return null;
+  const Ctor: typeof AudioContext | undefined =
+    (window as unknown as { AudioContext?: typeof AudioContext; webkitAudioContext?: typeof AudioContext })
+      .AudioContext ??
+    (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+  if (!Ctor) return null;
+  try {
+    const ctx = new Ctor();
+    const dest = ctx.createMediaStreamDestination();
+    for (const { el, volume } of sources) {
+      const node = ctx.createMediaElementSource(el);
+      if (volume !== undefined && volume !== 1) {
+        const gain = ctx.createGain();
+        gain.gain.value = Math.max(0, Math.min(1, volume));
+        node.connect(gain);
+        gain.connect(dest);
+      } else {
+        node.connect(dest);
+      }
+    }
+    const audioTrack = dest.stream.getAudioTracks()[0];
+    if (audioTrack) stream.addTrack(audioTrack);
+    return ctx;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Load a soundtrack ready for recording. It loops, so a short sound covers a
+ * longer edit, and it is never routed to the speakers.
+ */
+export async function prepareSoundtrack(url: string, signal?: AbortSignal) {
+  const audio = document.createElement("audio");
+  audio.crossOrigin = "anonymous";
+  audio.loop = true;
+  audio.preload = "auto";
+  audio.src = url;
+  await new Promise<void>((resolve, reject) => {
+    const cleanup = () => {
+      clearTimeout(timer);
+      audio.removeEventListener("loadedmetadata", ok);
+      audio.removeEventListener("error", fail);
+      signal?.removeEventListener("abort", onAbort);
+    };
+    const ok = () => {
+      cleanup();
+      resolve();
+    };
+    const fail = () => {
+      cleanup();
+      reject(new Error("The selected sound could not be loaded."));
+    };
+    const onAbort = () => {
+      cleanup();
+      reject(new RenderCancelledError());
+    };
+    const timer = setTimeout(() => {
+      cleanup();
+      reject(new Error("Timed out loading the selected sound."));
+    }, 30_000);
+    if (signal?.aborted) {
+      onAbort();
+      return;
+    }
+    audio.addEventListener("loadedmetadata", ok, { once: true });
+    audio.addEventListener("error", fail, { once: true });
+    signal?.addEventListener("abort", onAbort, { once: true });
+  });
+  audio.currentTime = 0;
+  return audio;
+}
+
 
 
 export type BrowserRenderResult = {
@@ -212,7 +300,7 @@ export function waitFor(
 
 
 export async function renderVariant(opts: BrowserRenderOptions): Promise<BrowserRenderResult> {
-  const { sourceUrl, durationSeconds, width, height, text, withAudio, signal } = opts;
+  const { sourceUrl, durationSeconds, width, height, text, withAudio, soundtrackUrl, signal } = opts;
   throwIfAborted(signal);
 
   // layoutOverlay measures text to decide wrapping and font size, and
@@ -303,7 +391,15 @@ export async function renderVariant(opts: BrowserRenderOptions): Promise<Browser
   const track = stream.getVideoTracks()[0] as CanvasCaptureMediaStreamTrack | undefined;
   const manualFrames = typeof track?.requestFrame === "function";
   const captureStreamToUse = manualFrames ? stream : canvas.captureStream(30);
-  const audioCtx = withAudio ? attachAudioTrack(video, captureStreamToUse) : null;
+  // Sound baked into the file: the chosen soundtrack (and the clip's own audio
+  // when the user kept it) are mixed into one recorded audio track.
+  const soundtrack = soundtrackUrl ? await prepareSoundtrack(soundtrackUrl, signal) : null;
+  if (soundtrack) soundtrack.volume = 1;
+  const audioSources: { el: HTMLMediaElement; volume?: number }[] = [];
+  if (withAudio) audioSources.push({ el: video, volume: soundtrack ? 0.35 : 1 });
+  if (soundtrack) audioSources.push({ el: soundtrack, volume: opts.soundtrackVolume ?? 1 });
+  attachAudioSources(captureStreamToUse, audioSources);
+
   const recorder = new MediaRecorder(captureStreamToUse, { mimeType, videoBitsPerSecond: 6_000_000 });
   const chunks: BlobPart[] = [];
   recorder.ondataavailable = (e) => {
@@ -375,7 +471,12 @@ export async function renderVariant(opts: BrowserRenderOptions): Promise<Browser
   drawFrame();
   recorder.start(200);
   const startedAt = performance.now();
+  if (soundtrack) {
+    soundtrack.currentTime = 0;
+    await soundtrack.play().catch(() => undefined);
+  }
   await video.play();
+
 
   try {
     await new Promise<void>((resolve, reject) => {
@@ -436,8 +537,13 @@ export async function renderVariant(opts: BrowserRenderOptions): Promise<Browser
     if (captureStreamToUse !== stream) stream.getTracks().forEach((t) => t.stop());
     video.pause();
     video.src = "";
+    if (soundtrack) {
+      soundtrack.pause();
+      soundtrack.src = "";
+    }
     throw e;
   }
+
 
 
   // Poster frame (with the overlay already composited) for the result card.
@@ -450,6 +556,7 @@ export async function renderVariant(opts: BrowserRenderOptions): Promise<Browser
   });
 
   video.pause();
+  if (soundtrack) soundtrack.pause();
   // Flush whatever is buffered in the current timeslice so the tail of the
   // clip isn't dropped with the final partial chunk.
   if (recorder.state === "recording") recorder.requestData();
@@ -460,6 +567,8 @@ export async function renderVariant(opts: BrowserRenderOptions): Promise<Browser
   if (captureStreamToUse !== stream) stream.getTracks().forEach((t) => t.stop());
 
   video.src = "";
+  if (soundtrack) soundtrack.src = "";
+
 
   const blob = new Blob(chunks, { type: mimeType });
   if (blob.size === 0) throw new Error("Recorder produced an empty file.");
