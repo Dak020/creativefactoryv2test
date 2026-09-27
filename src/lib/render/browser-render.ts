@@ -537,8 +537,13 @@ export async function renderVariant(opts: BrowserRenderOptions): Promise<Browser
     if (captureStreamToUse !== stream) stream.getTracks().forEach((t) => t.stop());
     video.pause();
     video.src = "";
+    if (soundtrack) {
+      soundtrack.pause();
+      soundtrack.src = "";
+    }
     throw e;
   }
+
 
 
   // Poster frame (with the overlay already composited) for the result card.
