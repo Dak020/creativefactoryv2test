@@ -471,7 +471,12 @@ export async function renderVariant(opts: BrowserRenderOptions): Promise<Browser
   drawFrame();
   recorder.start(200);
   const startedAt = performance.now();
+  if (soundtrack) {
+    soundtrack.currentTime = 0;
+    await soundtrack.play().catch(() => undefined);
+  }
   await video.play();
+
 
   try {
     await new Promise<void>((resolve, reject) => {
