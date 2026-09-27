@@ -11,15 +11,17 @@
  */
 
 import {
-  attachAudioTrack,
+  attachAudioSources,
   fontFor,
   layoutOverlay,
   pickMimeType,
+  prepareSoundtrack,
   waitFor,
   RenderCancelledError,
   type BrowserRenderResult,
   type HookPlacement,
 } from "./browser-render";
+
 
 export type SequenceSegment = {
   /** Playable URL for this segment's source clip. */
