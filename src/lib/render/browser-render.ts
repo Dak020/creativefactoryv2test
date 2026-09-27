@@ -391,7 +391,15 @@ export async function renderVariant(opts: BrowserRenderOptions): Promise<Browser
   const track = stream.getVideoTracks()[0] as CanvasCaptureMediaStreamTrack | undefined;
   const manualFrames = typeof track?.requestFrame === "function";
   const captureStreamToUse = manualFrames ? stream : canvas.captureStream(30);
-  const audioCtx = withAudio ? attachAudioTrack(video, captureStreamToUse) : null;
+  // Sound baked into the file: the chosen soundtrack (and the clip's own audio
+  // when the user kept it) are mixed into one recorded audio track.
+  const soundtrack = soundtrackUrl ? await prepareSoundtrack(soundtrackUrl, signal) : null;
+  if (soundtrack) soundtrack.volume = 1;
+  const audioSources: { el: HTMLMediaElement; volume?: number }[] = [];
+  if (withAudio) audioSources.push({ el: video, volume: soundtrack ? 0.35 : 1 });
+  if (soundtrack) audioSources.push({ el: soundtrack, volume: opts.soundtrackVolume ?? 1 });
+  attachAudioSources(captureStreamToUse, audioSources);
+
   const recorder = new MediaRecorder(captureStreamToUse, { mimeType, videoBitsPerSecond: 6_000_000 });
   const chunks: BlobPart[] = [];
   recorder.ondataavailable = (e) => {
