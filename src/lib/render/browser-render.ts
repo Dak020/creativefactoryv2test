@@ -69,6 +69,89 @@ export function attachAudioTrack(video: HTMLVideoElement, stream: MediaStream) {
   }
 }
 
+/**
+ * Mix several media elements (clip audio + a chosen soundtrack) into ONE audio
+ * track on the recorded stream. Nothing is connected to ctx.destination, so the
+ * render stays silent for the person watching it happen.
+ */
+export function attachAudioSources(
+  stream: MediaStream,
+  sources: { el: HTMLMediaElement; volume?: number }[],
+) {
+  if (sources.length === 0) return null;
+  const Ctor: typeof AudioContext | undefined =
+    (window as unknown as { AudioContext?: typeof AudioContext; webkitAudioContext?: typeof AudioContext })
+      .AudioContext ??
+    (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+  if (!Ctor) return null;
+  try {
+    const ctx = new Ctor();
+    const dest = ctx.createMediaStreamDestination();
+    for (const { el, volume } of sources) {
+      const node = ctx.createMediaElementSource(el);
+      if (volume !== undefined && volume !== 1) {
+        const gain = ctx.createGain();
+        gain.gain.value = Math.max(0, Math.min(1, volume));
+        node.connect(gain);
+        gain.connect(dest);
+      } else {
+        node.connect(dest);
+      }
+    }
+    const audioTrack = dest.stream.getAudioTracks()[0];
+    if (audioTrack) stream.addTrack(audioTrack);
+    return ctx;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Load a soundtrack ready for recording. It loops, so a short sound covers a
+ * longer edit, and it is never routed to the speakers.
+ */
+export async function prepareSoundtrack(url: string, signal?: AbortSignal) {
+  const audio = document.createElement("audio");
+  audio.crossOrigin = "anonymous";
+  audio.loop = true;
+  audio.preload = "auto";
+  audio.src = url;
+  await new Promise<void>((resolve, reject) => {
+    const cleanup = () => {
+      clearTimeout(timer);
+      audio.removeEventListener("loadedmetadata", ok);
+      audio.removeEventListener("error", fail);
+      signal?.removeEventListener("abort", onAbort);
+    };
+    const ok = () => {
+      cleanup();
+      resolve();
+    };
+    const fail = () => {
+      cleanup();
+      reject(new Error("The selected sound could not be loaded."));
+    };
+    const onAbort = () => {
+      cleanup();
+      reject(new RenderCancelledError());
+    };
+    const timer = setTimeout(() => {
+      cleanup();
+      reject(new Error("Timed out loading the selected sound."));
+    }, 30_000);
+    if (signal?.aborted) {
+      onAbort();
+      return;
+    }
+    audio.addEventListener("loadedmetadata", ok, { once: true });
+    audio.addEventListener("error", fail, { once: true });
+    signal?.addEventListener("abort", onAbort, { once: true });
+  });
+  audio.currentTime = 0;
+  return audio;
+}
+
+
 
 export type BrowserRenderResult = {
   blob: Blob;
