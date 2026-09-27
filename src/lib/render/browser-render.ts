@@ -300,7 +300,7 @@ export function waitFor(
 
 
 export async function renderVariant(opts: BrowserRenderOptions): Promise<BrowserRenderResult> {
-  const { sourceUrl, durationSeconds, width, height, text, withAudio, signal } = opts;
+  const { sourceUrl, durationSeconds, width, height, text, withAudio, soundtrackUrl, signal } = opts;
   throwIfAborted(signal);
 
   // layoutOverlay measures text to decide wrapping and font size, and
