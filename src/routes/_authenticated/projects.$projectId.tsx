@@ -380,6 +380,7 @@ function ProjectWorkspace() {
 
       const hookList = hooks.map((h) => ({ id: h.id, text: h.text }));
       const hook = hookList[Math.floor(Math.random() * hookList.length)]!;
+      const soundtrackUrl = await resolveSoundtrack();
 
       const item = await runDnaVariant({
         userId: user.id,
