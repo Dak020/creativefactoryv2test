@@ -452,7 +452,8 @@ function ProjectWorkspace() {
         hooks: hookList,
         targetDuration: target,
         quantity: remaining,
-        withAudio: originalSound,
+        withAudio: audioSelection.withAudio,
+        soundtrackUrl,
         signal: controller.signal,
         onUpdate: (updated) => setDnaLive([dnaPreview.item, ...updated]),
       });
