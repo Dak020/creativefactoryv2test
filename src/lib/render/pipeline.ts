@@ -225,6 +225,8 @@ export async function runBatch(input: BatchInput): Promise<BatchItem[]> {
         text: item.hookText,
         placement,
         withAudio: Boolean(input.withAudio),
+        soundtrackUrl: input.soundtrackUrl,
+        soundtrackVolume: input.soundtrackVolume,
         signal: input.signal,
         onProgress: (pct) => patch(item.jobId, { stage: "rendering", progress: Math.max(4, pct * 0.8) }),
       });
@@ -338,6 +340,10 @@ export type MultiClipBatchInput = {
   hooks: { id: string; text: string }[];
   quantity: number;
   withAudio?: boolean;
+  /** Fully-resolved, CORS-readable URL of a soundtrack to bake into every variant. */
+  soundtrackUrl?: string | undefined;
+  /** Soundtrack level, 0..1 (defaults to 1). */
+  soundtrackVolume?: number | undefined;
   signal?: AbortSignal | undefined;
   onUpdate: (items: BatchItem[]) => void;
 };
@@ -473,6 +479,8 @@ export async function runMultiClipBatch(input: MultiClipBatchInput): Promise<Bat
         text: item.hookText,
         placement: clipInfo.placement,
         withAudio: Boolean(input.withAudio),
+        soundtrackUrl: input.soundtrackUrl,
+        soundtrackVolume: input.soundtrackVolume,
         signal: input.signal,
         onProgress: (pct) => patch(item.jobId, { stage: "rendering", progress: Math.max(4, pct * 0.8) }),
       });
