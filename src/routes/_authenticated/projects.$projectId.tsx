@@ -445,6 +445,7 @@ function ProjectWorkspace() {
     setDnaLive([dnaPreview.item]);
     try {
       const hookList = hooks.map((h) => ({ id: h.id, text: h.text }));
+      const soundtrackUrl = await resolveSoundtrack();
       const items = await runDnaBatch({
         userId: user.id,
         projectId,
