@@ -67,6 +67,10 @@ export type BatchInput = {
   hooks: { id: string; text: string }[];
   quantity: number;
   withAudio?: boolean;
+  /** Fully-resolved, CORS-readable URL of a soundtrack to bake into every variant. */
+  soundtrackUrl?: string | undefined;
+  /** Soundtrack level, 0..1 (defaults to 1). */
+  soundtrackVolume?: number | undefined;
   signal?: AbortSignal | undefined;
   onUpdate: (items: BatchItem[]) => void;
 };
