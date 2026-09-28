@@ -779,15 +779,11 @@ function StudioPage() {
           </p>
         </div>
 
-        <div className="flex items-center justify-between rounded-lg border border-border/60 p-3">
-          <div>
-            <Label className="text-xs">Original sound</Label>
-            <p className="text-xs text-muted-foreground">
-              Keep the source clip's own audio in the export instead of a silent render.
-            </p>
-          </div>
-          <Switch checked={originalSound} onCheckedChange={setOriginalSound} />
-        </div>
+        <AudioStrategySelector
+          value={audioSelection}
+          onChange={setAudioSelection}
+          initialAudioId={search.audioId ?? null}
+        />
 
         <div className="flex flex-wrap items-end gap-4">
           <div className="space-y-1.5">
