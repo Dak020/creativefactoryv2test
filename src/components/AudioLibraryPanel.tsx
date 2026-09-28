@@ -318,8 +318,7 @@ export function AudioLibraryPanel() {
           <DialogHeader>
             <DialogTitle>Import audio</DialogTitle>
             <DialogDescription>
-              Paste a direct MP3 link or a TikTok sound link, give it a title, and it's saved to
-              your library.
+              Paste a direct link to an MP3 file, give it a title, and it's saved to your library.
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-4">

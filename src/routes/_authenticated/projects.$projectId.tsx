@@ -4,6 +4,8 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { ArrowLeft, CalendarClock, ChevronDown, Download, Loader2, Play, Sparkles, Trophy } from "lucide-react";
 import { ScheduleTikTokDialog } from "@/components/ScheduleTikTokDialog";
+import { AudioStrategySelector, type AudioSelection } from "@/components/AudioStrategySelector";
+import { resolveAudioUrl } from "@/lib/audio-url";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/useAuth";
 import { MediaLibraryPanel } from "@/components/MediaLibraryPanel";
@@ -96,7 +98,11 @@ function ProjectWorkspace() {
   // counts as the first one). Selectable instead of following the single-clip
   // batch quantity.
   const [dnaQuantity, setDnaQuantity] = useState("4");
-  const [originalSound, setOriginalSound] = useState(false);
+  const [audioSelection, setAudioSelection] = useState<AudioSelection>({
+    strategy: "none",
+    withAudio: false,
+    audio: null,
+  });
 
   const [dnaRunning, setDnaRunning] = useState(false);
   const [dnaLive, setDnaLive] = useState<BatchItem[]>([]);
@@ -339,6 +345,14 @@ function ProjectWorkspace() {
     return ready;
   }
 
+  /** Resolves the currently-selected soundtrack (if any) to a playable URL. */
+  async function resolveSoundtrack(): Promise<string | undefined> {
+    if (!audioSelection.audio) return undefined;
+    const resolved = await resolveAudioUrl(audioSelection.audio);
+    if (!resolved) throw new Error("The selected sound has no playable audio link — pick another.");
+    return resolved;
+  }
+
   async function runDnaPreview() {
     if (!user) return;
     if (!dnaRoles.ok) {
@@ -380,13 +394,15 @@ function ProjectWorkspace() {
 
       const hookList = hooks.map((h) => ({ id: h.id, text: h.text }));
       const hook = hookList[Math.floor(Math.random() * hookList.length)]!;
+      const soundtrackUrl = await resolveSoundtrack();
 
       const item = await runDnaVariant({
         userId: user.id,
         projectId,
         plan: planned.plan,
         hook,
-        withAudio: originalSound,
+        withAudio: audioSelection.withAudio,
+        soundtrackUrl,
         signal: controller.signal,
         isPreview: true,
         onUpdate: (updated) => setDnaLive([updated]),
@@ -445,6 +461,7 @@ function ProjectWorkspace() {
     setDnaLive([dnaPreview.item]);
     try {
       const hookList = hooks.map((h) => ({ id: h.id, text: h.text }));
+      const soundtrackUrl = await resolveSoundtrack();
       const items = await runDnaBatch({
         userId: user.id,
         projectId,
@@ -452,7 +469,8 @@ function ProjectWorkspace() {
         hooks: hookList,
         targetDuration: target,
         quantity: remaining,
-        withAudio: originalSound,
+        withAudio: audioSelection.withAudio,
+        soundtrackUrl,
         signal: controller.signal,
         onUpdate: (updated) => setDnaLive([dnaPreview.item, ...updated]),
       });
@@ -702,14 +720,9 @@ function ProjectWorkspace() {
               allowed speeds in the Media tab. The hook is burned onto the opening segment only.
             </p>
           </div>
-          <label className="flex items-center gap-2 text-xs">
-            <Checkbox
-              checked={originalSound}
-              onCheckedChange={(v) => setOriginalSound(Boolean(v))}
-            />
-            Original sound
-          </label>
         </div>
+
+        <AudioStrategySelector value={audioSelection} onChange={setAudioSelection} />
 
         <div className="flex flex-wrap items-end gap-3">
           <div className="space-y-1.5">

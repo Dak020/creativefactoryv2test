@@ -4,6 +4,8 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { CalendarClock, Download, Film, Loader2, Plus, Trophy, Upload, Wand2 } from "lucide-react";
 import { ScheduleTikTokDialog } from "@/components/ScheduleTikTokDialog";
+import { AudioStrategySelector, type AudioSelection } from "@/components/AudioStrategySelector";
+import { resolveAudioUrl } from "@/lib/audio-url";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/useAuth";
 import { EmptyState, PageHeader, StatusPill } from "@/components/ui-kit";
@@ -45,6 +47,9 @@ const MAX_HOOKS = 10;
 const MAX_QUANTITY = 30;
 
 export const Route = createFileRoute("/_authenticated/studio")({
+  validateSearch: (search: Record<string, unknown>) => ({
+    audioId: typeof search["audioId"] === "string" ? search["audioId"] : undefined,
+  }),
   head: () => ({
     meta: [
       { title: "Studio — Creative Factory" },
@@ -274,7 +279,12 @@ function StudioPage() {
   // selected clips (remainder randomly assigned) instead of using only the
   // single clip picked above.
   const [multiClipMode, setMultiClipMode] = useState(false);
-  const [originalSound, setOriginalSound] = useState(false);
+  const search = Route.useSearch();
+  const [audioSelection, setAudioSelection] = useState<AudioSelection>({
+    strategy: "none",
+    withAudio: false,
+    audio: null,
+  });
   const [selectedClipIds, setSelectedClipIds] = useState<string[]>([]);
   function toggleClipSelected(id: string) {
     setSelectedClipIds((prev) => (prev.includes(id) ? prev.filter((c) => c !== id) : [...prev, id]));
@@ -402,6 +412,18 @@ function StudioPage() {
       return;
     }
 
+    // Resolve the chosen soundtrack (if any) to a playable URL once, up
+    // front, so every variant in this batch bakes in the same track.
+    let soundtrackUrl: string | undefined;
+    if (audioSelection.audio) {
+      const resolved = await resolveAudioUrl(audioSelection.audio);
+      if (!resolved) {
+        toast.error("The selected sound has no playable audio link — pick another.");
+        return;
+      }
+      soundtrackUrl = resolved;
+    }
+
     if (multiClipMode) {
       if (selectedClipIds.length === 0) {
         toast.error("Select at least one clip.");
@@ -445,7 +467,8 @@ function StudioPage() {
           })),
           hooks: chosen,
           quantity,
-          withAudio: originalSound,
+          withAudio: audioSelection.withAudio,
+          soundtrackUrl,
           signal: controller.signal,
           onUpdate: setLive,
         });
@@ -489,7 +512,8 @@ function StudioPage() {
         assetUrl,
         hooks: chosen,
         quantity,
-        withAudio: originalSound,
+        withAudio: audioSelection.withAudio,
+        soundtrackUrl,
         signal: controller.signal,
         onUpdate: setLive,
       });
@@ -779,15 +803,11 @@ function StudioPage() {
           </p>
         </div>
 
-        <div className="flex items-center justify-between rounded-lg border border-border/60 p-3">
-          <div>
-            <Label className="text-xs">Original sound</Label>
-            <p className="text-xs text-muted-foreground">
-              Keep the source clip's own audio in the export instead of a silent render.
-            </p>
-          </div>
-          <Switch checked={originalSound} onCheckedChange={setOriginalSound} />
-        </div>
+        <AudioStrategySelector
+          value={audioSelection}
+          onChange={setAudioSelection}
+          initialAudioId={search.audioId ?? null}
+        />
 
         <div className="flex flex-wrap items-end gap-4">
           <div className="space-y-1.5">

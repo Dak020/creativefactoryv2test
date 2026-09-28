@@ -63,6 +63,10 @@ export type DnaVariantInput = {
   plan: DnaPlan;
   hook: { id: string; text: string };
   withAudio?: boolean;
+  /** Fully-resolved, CORS-readable URL of a soundtrack to bake into the export. */
+  soundtrackUrl?: string | undefined;
+  /** Soundtrack level, 0..1 (defaults to 1). */
+  soundtrackVolume?: number | undefined;
   signal?: AbortSignal | undefined;
   /** When true, this render is a preview the user hasn't approved yet — the
    *  video is still actually rendered and uploaded (so it can be watched
@@ -173,6 +177,8 @@ export async function runDnaVariant(input: DnaVariantInput): Promise<BatchItem> 
       text: hook.text,
       placement: plan.placement,
       withAudio: !!withAudio,
+      soundtrackUrl: input.soundtrackUrl,
+      soundtrackVolume: input.soundtrackVolume,
       signal: input.signal,
       onProgress: (pct) => patch({ stage: "rendering", progress: Math.max(4, pct * 0.8) }),
     });
@@ -367,6 +373,10 @@ export type DnaBatchInput = {
   targetDuration: number;
   quantity: number;
   withAudio?: boolean;
+  /** Fully-resolved, CORS-readable URL of a soundtrack to bake into the export. */
+  soundtrackUrl?: string | undefined;
+  /** Soundtrack level, 0..1 (defaults to 1). */
+  soundtrackVolume?: number | undefined;
   signal?: AbortSignal;
   onUpdate: (items: BatchItem[]) => void;
 };
@@ -395,6 +405,8 @@ export async function runDnaBatch(input: DnaBatchInput): Promise<BatchItem[]> {
       plan: planned.plan,
       hook,
       withAudio: !!input.withAudio,
+      soundtrackUrl: input.soundtrackUrl,
+      soundtrackVolume: input.soundtrackVolume,
       signal,
       onUpdate: (updated) => {
         const idx = items.findIndex((b) => b.jobId === updated.jobId);
