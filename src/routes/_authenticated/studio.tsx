@@ -445,7 +445,8 @@ function StudioPage() {
           })),
           hooks: chosen,
           quantity,
-          withAudio: originalSound,
+          withAudio: audioSelection.withAudio,
+          soundtrackUrl,
           signal: controller.signal,
           onUpdate: setLive,
         });
