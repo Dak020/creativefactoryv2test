@@ -702,14 +702,9 @@ function ProjectWorkspace() {
               allowed speeds in the Media tab. The hook is burned onto the opening segment only.
             </p>
           </div>
-          <label className="flex items-center gap-2 text-xs">
-            <Checkbox
-              checked={originalSound}
-              onCheckedChange={(v) => setOriginalSound(Boolean(v))}
-            />
-            Original sound
-          </label>
         </div>
+
+        <AudioStrategySelector value={audioSelection} onChange={setAudioSelection} />
 
         <div className="flex flex-wrap items-end gap-3">
           <div className="space-y-1.5">
