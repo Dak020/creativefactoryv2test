@@ -339,6 +339,14 @@ function ProjectWorkspace() {
     return ready;
   }
 
+  /** Resolves the currently-selected soundtrack (if any) to a playable URL. */
+  async function resolveSoundtrack(): Promise<string | undefined> {
+    if (!audioSelection.audio) return undefined;
+    const resolved = await resolveAudioUrl(audioSelection.audio);
+    if (!resolved) throw new Error("The selected sound has no playable audio link — pick another.");
+    return resolved;
+  }
+
   async function runDnaPreview() {
     if (!user) return;
     if (!dnaRoles.ok) {
