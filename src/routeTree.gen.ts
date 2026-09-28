@@ -16,6 +16,7 @@ import { Route as PrivacyRouteImport } from './routes/privacy'
 import { Route as ResetPasswordRouteImport } from './routes/reset-password'
 import { Route as TermsRouteImport } from './routes/terms'
 import { Route as AuthenticatedAccountsRouteImport } from './routes/_authenticated/accounts'
+import { Route as AuthenticatedAudioRouteImport } from './routes/_authenticated/audio'
 import { Route as AuthenticatedCaptionsRouteImport } from './routes/_authenticated/captions'
 import { Route as AuthenticatedDashboardRouteImport } from './routes/_authenticated/dashboard'
 import { Route as AuthenticatedHooksRouteImport } from './routes/_authenticated/hooks'
@@ -63,6 +64,11 @@ const TermsRoute = TermsRouteImport.update({
 const AuthenticatedAccountsRoute = AuthenticatedAccountsRouteImport.update({
   id: '/accounts',
   path: '/accounts',
+  getParentRoute: () => AuthenticatedRouteRoute,
+} as any)
+const AuthenticatedAudioRoute = AuthenticatedAudioRouteImport.update({
+  id: '/audio',
+  path: '/audio',
   getParentRoute: () => AuthenticatedRouteRoute,
 } as any)
 const AuthenticatedCaptionsRoute = AuthenticatedCaptionsRouteImport.update({
@@ -146,6 +152,7 @@ export interface FileRoutesByFullPath {
   '/reset-password': typeof ResetPasswordRoute
   '/terms': typeof TermsRoute
   '/accounts': typeof AuthenticatedAccountsRoute
+  '/audio': typeof AuthenticatedAudioRoute
   '/captions': typeof AuthenticatedCaptionsRoute
   '/dashboard': typeof AuthenticatedDashboardRoute
   '/hooks': typeof AuthenticatedHooksRoute
@@ -167,6 +174,7 @@ export interface FileRoutesByTo {
   '/reset-password': typeof ResetPasswordRoute
   '/terms': typeof TermsRoute
   '/accounts': typeof AuthenticatedAccountsRoute
+  '/audio': typeof AuthenticatedAudioRoute
   '/captions': typeof AuthenticatedCaptionsRoute
   '/dashboard': typeof AuthenticatedDashboardRoute
   '/hooks': typeof AuthenticatedHooksRoute
@@ -191,6 +199,7 @@ export interface FileRoutesById {
   '/reset-password': typeof ResetPasswordRoute
   '/terms': typeof TermsRoute
   '/_authenticated/accounts': typeof AuthenticatedAccountsRoute
+  '/_authenticated/audio': typeof AuthenticatedAudioRoute
   '/_authenticated/captions': typeof AuthenticatedCaptionsRoute
   '/_authenticated/dashboard': typeof AuthenticatedDashboardRoute
   '/_authenticated/hooks': typeof AuthenticatedHooksRoute
@@ -215,6 +224,7 @@ export interface FileRouteTypes {
     | '/reset-password'
     | '/terms'
     | '/accounts'
+    | '/audio'
     | '/captions'
     | '/dashboard'
     | '/hooks'
@@ -236,6 +246,7 @@ export interface FileRouteTypes {
     | '/reset-password'
     | '/terms'
     | '/accounts'
+    | '/audio'
     | '/captions'
     | '/dashboard'
     | '/hooks'
@@ -259,6 +270,7 @@ export interface FileRouteTypes {
     | '/reset-password'
     | '/terms'
     | '/_authenticated/accounts'
+    | '/_authenticated/audio'
     | '/_authenticated/captions'
     | '/_authenticated/dashboard'
     | '/_authenticated/hooks'
@@ -335,6 +347,13 @@ declare module '@tanstack/react-router' {
       path: '/accounts'
       fullPath: '/accounts'
       preLoaderRoute: typeof AuthenticatedAccountsRouteImport
+      parentRoute: typeof AuthenticatedRouteRoute
+    }
+    '/_authenticated/audio': {
+      id: '/_authenticated/audio'
+      path: '/audio'
+      fullPath: '/audio'
+      preLoaderRoute: typeof AuthenticatedAudioRouteImport
       parentRoute: typeof AuthenticatedRouteRoute
     }
     '/_authenticated/captions': {
@@ -440,6 +459,7 @@ declare module '@tanstack/react-router' {
 
 interface AuthenticatedRouteRouteChildren {
   AuthenticatedAccountsRoute: typeof AuthenticatedAccountsRoute
+  AuthenticatedAudioRoute: typeof AuthenticatedAudioRoute
   AuthenticatedCaptionsRoute: typeof AuthenticatedCaptionsRoute
   AuthenticatedDashboardRoute: typeof AuthenticatedDashboardRoute
   AuthenticatedHooksRoute: typeof AuthenticatedHooksRoute
@@ -454,6 +474,7 @@ interface AuthenticatedRouteRouteChildren {
 
 const AuthenticatedRouteRouteChildren: AuthenticatedRouteRouteChildren = {
   AuthenticatedAccountsRoute: AuthenticatedAccountsRoute,
+  AuthenticatedAudioRoute: AuthenticatedAudioRoute,
   AuthenticatedCaptionsRoute: AuthenticatedCaptionsRoute,
   AuthenticatedDashboardRoute: AuthenticatedDashboardRoute,
   AuthenticatedHooksRoute: AuthenticatedHooksRoute,
