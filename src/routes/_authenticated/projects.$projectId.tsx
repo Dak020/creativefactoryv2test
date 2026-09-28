@@ -4,6 +4,8 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { ArrowLeft, CalendarClock, ChevronDown, Download, Loader2, Play, Sparkles, Trophy } from "lucide-react";
 import { ScheduleTikTokDialog } from "@/components/ScheduleTikTokDialog";
+import { AudioStrategySelector, type AudioSelection } from "@/components/AudioStrategySelector";
+import { resolveAudioUrl } from "@/lib/audio-url";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/useAuth";
 import { MediaLibraryPanel } from "@/components/MediaLibraryPanel";
@@ -96,7 +98,11 @@ function ProjectWorkspace() {
   // counts as the first one). Selectable instead of following the single-clip
   // batch quantity.
   const [dnaQuantity, setDnaQuantity] = useState("4");
-  const [originalSound, setOriginalSound] = useState(false);
+  const [audioSelection, setAudioSelection] = useState<AudioSelection>({
+    strategy: "none",
+    withAudio: false,
+    audio: null,
+  });
 
   const [dnaRunning, setDnaRunning] = useState(false);
   const [dnaLive, setDnaLive] = useState<BatchItem[]>([]);
