@@ -274,7 +274,12 @@ function StudioPage() {
   // selected clips (remainder randomly assigned) instead of using only the
   // single clip picked above.
   const [multiClipMode, setMultiClipMode] = useState(false);
-  const [originalSound, setOriginalSound] = useState(false);
+  const search = Route.useSearch();
+  const [audioSelection, setAudioSelection] = useState<AudioSelection>({
+    strategy: "none",
+    withAudio: false,
+    audio: null,
+  });
   const [selectedClipIds, setSelectedClipIds] = useState<string[]>([]);
   function toggleClipSelected(id: string) {
     setSelectedClipIds((prev) => (prev.includes(id) ? prev.filter((c) => c !== id) : [...prev, id]));
