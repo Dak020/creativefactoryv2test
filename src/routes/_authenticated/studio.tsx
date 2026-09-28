@@ -4,6 +4,8 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { CalendarClock, Download, Film, Loader2, Plus, Trophy, Upload, Wand2 } from "lucide-react";
 import { ScheduleTikTokDialog } from "@/components/ScheduleTikTokDialog";
+import { AudioStrategySelector, type AudioSelection } from "@/components/AudioStrategySelector";
+import { resolveAudioUrl } from "@/lib/audio-url";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/useAuth";
 import { EmptyState, PageHeader, StatusPill } from "@/components/ui-kit";
@@ -45,6 +47,9 @@ const MAX_HOOKS = 10;
 const MAX_QUANTITY = 30;
 
 export const Route = createFileRoute("/_authenticated/studio")({
+  validateSearch: (search: Record<string, unknown>) => ({
+    audioId: typeof search["audioId"] === "string" ? search["audioId"] : undefined,
+  }),
   head: () => ({
     meta: [
       { title: "Studio — Creative Factory" },
