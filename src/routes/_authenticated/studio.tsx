@@ -402,6 +402,18 @@ function StudioPage() {
       return;
     }
 
+    // Resolve the chosen soundtrack (if any) to a playable URL once, up
+    // front, so every variant in this batch bakes in the same track.
+    let soundtrackUrl: string | undefined;
+    if (audioSelection.audio) {
+      const resolved = await resolveAudioUrl(audioSelection.audio);
+      if (!resolved) {
+        toast.error("The selected sound has no playable audio link — pick another.");
+        return;
+      }
+      soundtrackUrl = resolved;
+    }
+
     if (multiClipMode) {
       if (selectedClipIds.length === 0) {
         toast.error("Select at least one clip.");
