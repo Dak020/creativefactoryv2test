@@ -140,9 +140,9 @@ export function getAiProvider(): AiProvider {
  * Resolve the provider for a signed-in user: their active saved connection if
  * they have one, otherwise the built-in gateway.
  */
-export async function getProviderForUser(userId: string): Promise<AiProvider> {
-  const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
-  const { data } = await supabaseAdmin
+export async function getProviderForUser(userId: string, supabase?: any): Promise<AiProvider> {
+  if (!supabase) return getAiProvider();
+  const { data } = await supabase
     .from("ai_credentials")
     .select("label, base_url, model, api_key")
     .eq("user_id", userId)

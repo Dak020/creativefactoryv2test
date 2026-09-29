@@ -159,7 +159,7 @@ async function dispatchRow(
   await context.supabase.from("scheduled_posts").update({ status: "posting" }).eq("id", row.id);
 
   try {
-    const videoUrl = await signRenderUrl(video.output_url);
+    const videoUrl = await signRenderUrl(context.supabase, video.output_url);
 
     if (account.driver === "tiktok") {
       // Direct TikTok posting has no "hold and publish later" concept — it
