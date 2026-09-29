@@ -3,13 +3,26 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useServerFn } from "@tanstack/react-start";
 import { useNavigate } from "@tanstack/react-router";
 import { toast } from "sonner";
-import { Flame, Loader2, Pause, Play, Star, Trash2, TrendingUp, Upload } from "lucide-react";
+import {
+  Flame,
+  Link2,
+  Loader2,
+  Pause,
+  Play,
+  RefreshCw,
+  Star,
+  Trash2,
+  TrendingUp,
+  Upload,
+} from "lucide-react";
 import {
   getTrendingAudiosFn,
   getMyAudioLibraryFn,
   toggleFavoriteAudioFn,
   addUploadedAudioFn,
   deleteCustomAudioFn,
+  syncTrendingAudiosFn,
+  importTikTokUrlAudioFn,
   type TrendingAudioRow,
 } from "@/lib/audio.functions";
 import { resolveAudioUrl } from "@/lib/audio-url";
@@ -18,6 +31,7 @@ import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/useAuth";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
@@ -164,13 +178,17 @@ export function AudioLibraryPanel() {
   const toggleFavorite = useServerFn(toggleFavoriteAudioFn);
   const addUploaded = useServerFn(addUploadedAudioFn);
   const deleteCustom = useServerFn(deleteCustomAudioFn);
+  const syncTrending = useServerFn(syncTrendingAudiosFn);
+  const importTikTokUrl = useServerFn(importTikTokUrlAudioFn);
 
   const [tab, setTab] = useState<"global" | "usa" | "mine">("global");
   const [playingId, setPlayingId] = useState<string | null>(null);
   const [uploadOpen, setUploadOpen] = useState(false);
+  const [uploadMode, setUploadMode] = useState<"file" | "link">("file");
   const [category, setCategory] = useState<string>(AUDIO_CATEGORIES[0]);
   const [uploading, setUploading] = useState(false);
   const [dragging, setDragging] = useState(false);
+  const [tiktokLink, setTiktokLink] = useState("");
   const audioElRef = useRef<HTMLAudioElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
@@ -221,6 +239,29 @@ export function AudioLibraryPanel() {
     onSuccess: () => {
       invalidateAll();
       toast.success("Sound removed");
+    },
+    onError: (e: Error) => toast.error(e.message),
+  });
+
+  const syncMut = useMutation({
+    mutationFn: (region: "global" | "usa") => syncTrending({ data: { region } }),
+    onSuccess: (result) => {
+      invalidateAll();
+      if (result.count > 0)
+        toast.success(`Synced ${result.count} trending sound${result.count === 1 ? "" : "s"}`);
+      else toast.info(result.message ?? "No new trending sounds found.");
+    },
+    onError: (e: Error) => toast.error(e.message),
+  });
+
+  const importUrlMut = useMutation({
+    mutationFn: (url: string) => importTikTokUrl({ data: { url } }),
+    onSuccess: () => {
+      invalidateAll();
+      setUploadOpen(false);
+      setTiktokLink("");
+      setTab("mine");
+      toast.success("Sound imported to My Library!");
     },
     onError: (e: Error) => toast.error(e.message),
   });
@@ -358,7 +399,7 @@ export function AudioLibraryPanel() {
         </div>
         <Button size="sm" onClick={() => setUploadOpen(true)}>
           <Upload className="mr-2 h-4 w-4" />
-          Upload audio
+          Add audio
         </Button>
       </div>
 
@@ -370,9 +411,39 @@ export function AudioLibraryPanel() {
         </TabsList>
 
         <TabsContent value="global" className="pt-4">
+          <div className="mb-3 flex justify-end">
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => syncMut.mutate("global")}
+              disabled={syncMut.isPending}
+            >
+              {syncMut.isPending && syncMut.variables === "global" ? (
+                <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" />
+              ) : (
+                <RefreshCw className="mr-2 h-3.5 w-3.5" />
+              )}
+              Sync trending
+            </Button>
+          </div>
           {renderList(systemOnly(globalQ.data?.audios), globalQ.isLoading, noTrendingHint)}
         </TabsContent>
         <TabsContent value="usa" className="pt-4">
+          <div className="mb-3 flex justify-end">
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => syncMut.mutate("usa")}
+              disabled={syncMut.isPending}
+            >
+              {syncMut.isPending && syncMut.variables === "usa" ? (
+                <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" />
+              ) : (
+                <RefreshCw className="mr-2 h-3.5 w-3.5" />
+              )}
+              Sync trending
+            </Button>
+          </div>
           {renderList(systemOnly(usaQ.data?.audios), usaQ.isLoading, noTrendingHint)}
         </TabsContent>
         <TabsContent value="mine" className="pt-4">
@@ -385,73 +456,134 @@ export function AudioLibraryPanel() {
         </TabsContent>
       </Tabs>
 
-      <Dialog open={uploadOpen} onOpenChange={(open) => !uploading && setUploadOpen(open)}>
+      <Dialog
+        open={uploadOpen}
+        onOpenChange={(open) => {
+          if (uploading || importUrlMut.isPending) return;
+          setUploadOpen(open);
+          if (!open) {
+            setUploadMode("file");
+            setTiktokLink("");
+          }
+        }}
+      >
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>Upload audio</DialogTitle>
+            <DialogTitle>
+              {uploadMode === "file" ? "Upload audio" : "Import a TikTok link"}
+            </DialogTitle>
             <DialogDescription>
-              Upload an audio file you have the rights to use. Uploaded files always play and export
-              correctly.
+              {uploadMode === "file"
+                ? "Upload an audio file you have the rights to use. Uploaded files always play and export correctly."
+                : "Paste a TikTok video or sound link — the audio is extracted and saved to your library."}
             </DialogDescription>
           </DialogHeader>
-          <div className="space-y-4">
-            <div className="space-y-1.5">
-              <Label htmlFor="audio-category">Category</Label>
-              <Select value={category} onValueChange={setCategory}>
-                <SelectTrigger id="audio-category" className="w-full">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  {AUDIO_CATEGORIES.map((c) => (
-                    <SelectItem key={c} value={c}>
-                      {c}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
 
-            <div
-              onDragOver={(e) => {
-                e.preventDefault();
-                setDragging(true);
-              }}
-              onDragLeave={() => setDragging(false)}
-              onDrop={(e) => {
-                e.preventDefault();
-                setDragging(false);
-                const file = e.dataTransfer.files[0];
-                if (file) void handleAudioUpload(file);
-              }}
-              onClick={() => fileInputRef.current?.click()}
-              className={`cursor-pointer rounded-lg border-2 border-dashed p-6 text-center hover:bg-muted/50 ${
-                dragging ? "border-primary bg-muted/50" : "border-border"
-              }`}
+          <div className="flex gap-2">
+            <Button
+              type="button"
+              variant={uploadMode === "file" ? "default" : "outline"}
+              size="sm"
+              onClick={() => setUploadMode("file")}
             >
-              <input
-                ref={fileInputRef}
-                type="file"
-                accept="audio/*,.mp3,.wav,.m4a,.aac,.ogg"
-                className="hidden"
-                onChange={(e) => {
-                  const file = e.target.files?.[0];
-                  if (file) void handleAudioUpload(file);
-                  e.target.value = "";
-                }}
-              />
-              {uploading ? (
-                <Loader2 className="mx-auto mb-2 h-8 w-8 animate-spin text-muted-foreground" />
-              ) : (
-                <Upload className="mx-auto mb-2 h-8 w-8 text-muted-foreground" />
-              )}
-              <p className="text-sm font-medium">
-                {uploading ? "Uploading…" : "Drop an audio file here, or click to browse"}
-              </p>
-              <p className="mt-1 text-xs text-muted-foreground">
-                MP3, WAV, M4A, AAC or OGG, up to 25 MB
-              </p>
-            </div>
+              <Upload className="mr-2 h-3.5 w-3.5" />
+              Upload a file
+            </Button>
+            <Button
+              type="button"
+              variant={uploadMode === "link" ? "default" : "outline"}
+              size="sm"
+              onClick={() => setUploadMode("link")}
+            >
+              <Link2 className="mr-2 h-3.5 w-3.5" />
+              Paste a TikTok link
+            </Button>
           </div>
+
+          {uploadMode === "file" ? (
+            <div className="space-y-4">
+              <div className="space-y-1.5">
+                <Label htmlFor="audio-category">Category</Label>
+                <Select value={category} onValueChange={setCategory}>
+                  <SelectTrigger id="audio-category" className="w-full">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {AUDIO_CATEGORIES.map((c) => (
+                      <SelectItem key={c} value={c}>
+                        {c}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+
+              <div
+                onDragOver={(e) => {
+                  e.preventDefault();
+                  setDragging(true);
+                }}
+                onDragLeave={() => setDragging(false)}
+                onDrop={(e) => {
+                  e.preventDefault();
+                  setDragging(false);
+                  const file = e.dataTransfer.files[0];
+                  if (file) void handleAudioUpload(file);
+                }}
+                onClick={() => fileInputRef.current?.click()}
+                className={`cursor-pointer rounded-lg border-2 border-dashed p-6 text-center hover:bg-muted/50 ${
+                  dragging ? "border-primary bg-muted/50" : "border-border"
+                }`}
+              >
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  accept="audio/*,.mp3,.wav,.m4a,.aac,.ogg"
+                  className="hidden"
+                  onChange={(e) => {
+                    const file = e.target.files?.[0];
+                    if (file) void handleAudioUpload(file);
+                    e.target.value = "";
+                  }}
+                />
+                {uploading ? (
+                  <Loader2 className="mx-auto mb-2 h-8 w-8 animate-spin text-muted-foreground" />
+                ) : (
+                  <Upload className="mx-auto mb-2 h-8 w-8 text-muted-foreground" />
+                )}
+                <p className="text-sm font-medium">
+                  {uploading ? "Uploading…" : "Drop an audio file here, or click to browse"}
+                </p>
+                <p className="mt-1 text-xs text-muted-foreground">
+                  MP3, WAV, M4A, AAC or OGG, up to 25 MB
+                </p>
+              </div>
+            </div>
+          ) : (
+            <div className="space-y-4">
+              <div className="space-y-1.5">
+                <Label htmlFor="tiktok-link">TikTok link</Label>
+                <Input
+                  id="tiktok-link"
+                  placeholder="https://www.tiktok.com/@user/video/… or https://vm.tiktok.com/…"
+                  value={tiktokLink}
+                  onChange={(e) => setTiktokLink(e.target.value)}
+                  disabled={importUrlMut.isPending}
+                />
+                <p className="text-[11px] text-muted-foreground">
+                  Works with a video link (its sound is extracted) or a sound page link.
+                </p>
+              </div>
+              <Button
+                className="w-full"
+                disabled={!tiktokLink.trim() || importUrlMut.isPending}
+                onClick={() => importUrlMut.mutate(tiktokLink.trim())}
+              >
+                {importUrlMut.isPending && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+                Import sound
+              </Button>
+            </div>
+          )}
         </DialogContent>
       </Dialog>
     </section>
