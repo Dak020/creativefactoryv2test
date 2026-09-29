@@ -3,41 +3,57 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useServerFn } from "@tanstack/react-start";
 import { useNavigate } from "@tanstack/react-router";
 import { toast } from "sonner";
-import { Flame, Loader2, Pause, Play, Plus, Star, TrendingUp, Trash2 } from "lucide-react";
+import { Flame, Loader2, Pause, Play, Star, Trash2, TrendingUp, Upload } from "lucide-react";
 import {
   getTrendingAudiosFn,
   getMyAudioLibraryFn,
   toggleFavoriteAudioFn,
-  addCustomAudioFn,
+  addUploadedAudioFn,
   deleteCustomAudioFn,
   type TrendingAudioRow,
 } from "@/lib/audio.functions";
 import { resolveAudioUrl } from "@/lib/audio-url";
 import { fmtDuration } from "@/lib/db";
+import { supabase } from "@/integrations/supabase/client";
+import { useAuth } from "@/hooks/useAuth";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import {
   Dialog,
   DialogContent,
   DialogDescription,
-  DialogFooter,
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
 
-type ImportDraft = { title: string; author: string; audioUrl: string; coverUrl: string };
-const emptyImport: ImportDraft = { title: "", author: "", audioUrl: "", coverUrl: "" };
+const AUDIO_CATEGORIES = [
+  "TikTok Trending",
+  "Viral Beats",
+  "Background / Lofi",
+  "Voiceover / Sound FX",
+] as const;
+const MAX_AUDIO_BYTES = 25 * 1024 * 1024;
+const AUDIO_EXT = /\.(mp3|wav|m4a|aac|ogg)$/i;
 
 function ViralityBadge({ audio }: { audio: TrendingAudioRow }) {
   return (
     <div className="flex flex-wrap items-center gap-1.5">
-      <Badge variant="secondary" className="gap-1">
-        <Flame className="h-3 w-3 text-orange-500" />
-        {Math.round(audio.virality_score)} virality
-      </Badge>
+      {/* Uploads aren't a measured trend, so they carry no score to show. */}
+      {audio.virality_score > 0 ? (
+        <Badge variant="secondary" className="gap-1">
+          <Flame className="h-3 w-3 text-orange-500" />
+          {Math.round(audio.virality_score)} virality
+        </Badge>
+      ) : null}
       {audio.trend_rate ? (
         <Badge variant="outline" className="gap-1">
           <TrendingUp className="h-3 w-3" />
@@ -123,7 +139,7 @@ function AudioCard({
         >
           Use in Studio
         </Button>
-        {canDelete && onDelete ? (
+        {canDelete ? (
           <Button
             variant="ghost"
             size="icon"
@@ -142,17 +158,21 @@ function AudioCard({
 
 export function AudioLibraryPanel() {
   const qc = useQueryClient();
+  const { user } = useAuth();
   const getTrending = useServerFn(getTrendingAudiosFn);
   const getMyLibrary = useServerFn(getMyAudioLibraryFn);
   const toggleFavorite = useServerFn(toggleFavoriteAudioFn);
-  const addCustom = useServerFn(addCustomAudioFn);
+  const addUploaded = useServerFn(addUploadedAudioFn);
   const deleteCustom = useServerFn(deleteCustomAudioFn);
 
   const [tab, setTab] = useState<"global" | "usa" | "mine">("global");
   const [playingId, setPlayingId] = useState<string | null>(null);
-  const [importOpen, setImportOpen] = useState(false);
-  const [draft, setDraft] = useState<ImportDraft>(emptyImport);
+  const [uploadOpen, setUploadOpen] = useState(false);
+  const [category, setCategory] = useState<string>(AUDIO_CATEGORIES[0]);
+  const [uploading, setUploading] = useState(false);
+  const [dragging, setDragging] = useState(false);
   const audioElRef = useRef<HTMLAudioElement | null>(null);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
 
   const globalQ = useQuery({
     queryKey: ["trending-audios", "global"],
@@ -170,6 +190,12 @@ export function AudioLibraryPanel() {
     enabled: tab === "mine",
   });
 
+  // The trending tabs are for curated (system-wide) sounds. Your own uploads
+  // live under My Library, even though they're also returned by the shared
+  // query the Studio picker reads from.
+  const systemOnly = (rows: TrendingAudioRow[] | undefined) =>
+    (rows ?? []).filter((a) => a.user_id === null);
+
   const invalidateAll = () => {
     qc.invalidateQueries({ queryKey: ["trending-audios"] });
     qc.invalidateQueries({ queryKey: ["my-audio-library"] });
@@ -182,33 +208,86 @@ export function AudioLibraryPanel() {
     onError: (e: Error) => toast.error(e.message),
   });
 
-  const importMut = useMutation({
-    mutationFn: (input: ImportDraft) =>
-      addCustom({
-        data: {
-          title: input.title,
-          audioUrl: input.audioUrl,
-          ...(input.author ? { author: input.author } : {}),
-          ...(input.coverUrl ? { coverUrl: input.coverUrl } : {}),
-        },
-      }),
-    onSuccess: () => {
-      invalidateAll();
-      setImportOpen(false);
-      setDraft(emptyImport);
-      toast.success("Sound imported");
-    },
-    onError: (e: Error) => toast.error(e.message),
-  });
-
   const deleteMut = useMutation({
-    mutationFn: (id: string) => deleteCustom({ data: { id } }),
+    mutationFn: async (audio: TrendingAudioRow) => {
+      await deleteCustom({ data: { id: audio.id } });
+      // An uploaded file is ours alone, so remove it from storage too. Other
+      // rows (favorited copies of a system sound) share a file with the
+      // original and must never delete it.
+      if (audio.source === "upload" && audio.storage_path) {
+        await supabase.storage.from("media").remove([audio.storage_path]);
+      }
+    },
     onSuccess: () => {
       invalidateAll();
       toast.success("Sound removed");
     },
     onError: (e: Error) => toast.error(e.message),
   });
+
+  async function handleAudioUpload(file: File) {
+    if (uploading) return;
+    if (!user) {
+      toast.error("Sign in again to upload.");
+      return;
+    }
+    if (!file.type.startsWith("audio/") && !AUDIO_EXT.test(file.name)) {
+      toast.error("Choose an audio file (.mp3, .wav, .m4a, .aac, .ogg).");
+      return;
+    }
+    if (file.size > MAX_AUDIO_BYTES) {
+      toast.error("That file is over 25 MB.");
+      return;
+    }
+    setUploading(true);
+    let path: string | null = null;
+    try {
+      // Read the length from the file itself (0 if the browser can't decode it).
+      const objectUrl = URL.createObjectURL(file);
+      const duration = await new Promise<number>((resolve) => {
+        const probe = new Audio();
+        const done = (n: number) => {
+          window.clearTimeout(timer);
+          URL.revokeObjectURL(objectUrl);
+          resolve(n);
+        };
+        const timer = window.setTimeout(() => done(0), 5000);
+        probe.addEventListener("loadedmetadata", () => done(Math.round(probe.duration) || 0), {
+          once: true,
+        });
+        probe.addEventListener("error", () => done(0), { once: true });
+        probe.src = objectUrl;
+      });
+
+      // MUST live under the user's id: the media bucket policy only allows
+      // writes where the first folder equals auth.uid().
+      const ext = (file.name.split(".").pop() || "mp3").toLowerCase();
+      path = `${user.id}/audio-${crypto.randomUUID()}.${ext}`;
+      const { error: upErr } = await supabase.storage
+        .from("media")
+        .upload(path, file, { contentType: file.type || "audio/mpeg" });
+      if (upErr) throw new Error(`Upload failed: ${upErr.message}`);
+
+      await addUploaded({
+        data: {
+          title: file.name.replace(/\.[^/.]+$/, ""),
+          storagePath: path,
+          category,
+          ...(duration > 0 ? { durationSeconds: duration } : {}),
+        },
+      });
+      invalidateAll();
+      setUploadOpen(false);
+      setTab("mine");
+      toast.success("Sound added to your library");
+    } catch (e) {
+      // Don't leave an orphaned file behind if the database insert failed.
+      if (path) await supabase.storage.from("media").remove([path]);
+      toast.error((e as Error).message);
+    } finally {
+      setUploading(false);
+    }
+  }
 
   async function handlePlayToggle(audio: TrendingAudioRow) {
     if (playingId === audio.id) {
@@ -229,8 +308,6 @@ export function AudioLibraryPanel() {
     setPlayingId(audio.id);
     el.onended = () => setPlayingId((cur) => (cur === audio.id ? null : cur));
   }
-
-  const canSaveImport = draft.title.trim() && /^https?:\/\//i.test(draft.audioUrl.trim());
 
   function renderList(
     audios: TrendingAudioRow[],
@@ -258,7 +335,7 @@ export function AudioLibraryPanel() {
               favMut.mutate({ audioId: audio.id, isFavorite: !audio.is_favorite })
             }
             favoritePending={favMut.isPending}
-            onDelete={(audio) => deleteMut.mutate(audio.id)}
+            onDelete={(audio) => deleteMut.mutate(audio)}
             deletePending={deleteMut.isPending}
             canDelete={canDelete}
           />
@@ -266,6 +343,9 @@ export function AudioLibraryPanel() {
       </ul>
     );
   }
+
+  const noTrendingHint =
+    "No trending sounds have been added yet. Upload your own and they'll show up under My Library.";
 
   return (
     <section className="panel space-y-5 p-6">
@@ -276,9 +356,9 @@ export function AudioLibraryPanel() {
             Pick a sound to bake into your next render, or let the VA auto-pick the top track.
           </p>
         </div>
-        <Button size="sm" onClick={() => setImportOpen(true)}>
-          <Plus className="mr-2 h-4 w-4" />
-          Import audio
+        <Button size="sm" onClick={() => setUploadOpen(true)}>
+          <Upload className="mr-2 h-4 w-4" />
+          Upload audio
         </Button>
       </div>
 
@@ -290,81 +370,88 @@ export function AudioLibraryPanel() {
         </TabsList>
 
         <TabsContent value="global" className="pt-4">
-          {renderList(
-            globalQ.data?.audios ?? [],
-            globalQ.isLoading,
-            "No global trending sounds yet — check back soon or import your own.",
-          )}
+          {renderList(systemOnly(globalQ.data?.audios), globalQ.isLoading, noTrendingHint)}
         </TabsContent>
         <TabsContent value="usa" className="pt-4">
-          {renderList(
-            usaQ.data?.audios ?? [],
-            usaQ.isLoading,
-            "No USA trending sounds yet — check back soon or import your own.",
-          )}
+          {renderList(systemOnly(usaQ.data?.audios), usaQ.isLoading, noTrendingHint)}
         </TabsContent>
         <TabsContent value="mine" className="pt-4">
           {renderList(
             mineQ.data?.audios ?? [],
             mineQ.isLoading,
-            "Nothing here yet — favorite a trending sound or import your own link.",
+            "Nothing here yet. Upload an audio file to get started.",
             true,
           )}
         </TabsContent>
       </Tabs>
 
-      <Dialog open={importOpen} onOpenChange={setImportOpen}>
+      <Dialog open={uploadOpen} onOpenChange={(open) => !uploading && setUploadOpen(open)}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>Import audio</DialogTitle>
+            <DialogTitle>Upload audio</DialogTitle>
             <DialogDescription>
-              Paste a direct link to an MP3 file, give it a title, and it's saved to your library.
+              Upload an audio file you have the rights to use. Uploaded files always play and export
+              correctly.
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-4">
             <div className="space-y-1.5">
-              <Label htmlFor="audio-title">Title</Label>
-              <Input
-                id="audio-title"
-                placeholder="e.g. Original sound - creator"
-                value={draft.title}
-                onChange={(e) => setDraft({ ...draft, title: e.target.value })}
-              />
+              <Label htmlFor="audio-category">Category</Label>
+              <Select value={category} onValueChange={setCategory}>
+                <SelectTrigger id="audio-category" className="w-full">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {AUDIO_CATEGORIES.map((c) => (
+                    <SelectItem key={c} value={c}>
+                      {c}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
             </div>
-            <div className="space-y-1.5">
-              <Label htmlFor="audio-author">Artist (optional)</Label>
-              <Input
-                id="audio-author"
-                value={draft.author}
-                onChange={(e) => setDraft({ ...draft, author: e.target.value })}
+
+            <div
+              onDragOver={(e) => {
+                e.preventDefault();
+                setDragging(true);
+              }}
+              onDragLeave={() => setDragging(false)}
+              onDrop={(e) => {
+                e.preventDefault();
+                setDragging(false);
+                const file = e.dataTransfer.files[0];
+                if (file) void handleAudioUpload(file);
+              }}
+              onClick={() => fileInputRef.current?.click()}
+              className={`cursor-pointer rounded-lg border-2 border-dashed p-6 text-center hover:bg-muted/50 ${
+                dragging ? "border-primary bg-muted/50" : "border-border"
+              }`}
+            >
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept="audio/*,.mp3,.wav,.m4a,.aac,.ogg"
+                className="hidden"
+                onChange={(e) => {
+                  const file = e.target.files?.[0];
+                  if (file) void handleAudioUpload(file);
+                  e.target.value = "";
+                }}
               />
-            </div>
-            <div className="space-y-1.5">
-              <Label htmlFor="audio-url">MP3 or TikTok link</Label>
-              <Input
-                id="audio-url"
-                placeholder="https://…"
-                value={draft.audioUrl}
-                onChange={(e) => setDraft({ ...draft, audioUrl: e.target.value })}
-              />
-              <p className="text-[11px] text-muted-foreground">
-                Must be a direct, publicly accessible link — a page that requires sign-in won't
-                play.
+              {uploading ? (
+                <Loader2 className="mx-auto mb-2 h-8 w-8 animate-spin text-muted-foreground" />
+              ) : (
+                <Upload className="mx-auto mb-2 h-8 w-8 text-muted-foreground" />
+              )}
+              <p className="text-sm font-medium">
+                {uploading ? "Uploading…" : "Drop an audio file here, or click to browse"}
+              </p>
+              <p className="mt-1 text-xs text-muted-foreground">
+                MP3, WAV, M4A, AAC or OGG, up to 25 MB
               </p>
             </div>
           </div>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setImportOpen(false)}>
-              Cancel
-            </Button>
-            <Button
-              onClick={() => importMut.mutate(draft)}
-              disabled={!canSaveImport || importMut.isPending}
-            >
-              {importMut.isPending && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-              Save sound
-            </Button>
-          </DialogFooter>
         </DialogContent>
       </Dialog>
     </section>
