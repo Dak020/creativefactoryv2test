@@ -46,7 +46,7 @@ export const saveAiCredentialFn = createServerFn({ method: "POST" })
       await context.supabase.from("ai_credentials").update({ is_active: false }).eq("user_id", userId);
     }
 
-    const { data: row, error } = await supabaseAdmin
+    const { data: row, error } = await context.supabase
       .from("ai_credentials")
       .insert({
         user_id: userId,
@@ -70,7 +70,7 @@ export const activateAiCredentialFn = createServerFn({ method: "POST" })
   .inputValidator((input: unknown) => IdSchema.parse(input))
   .handler(async ({ data, context }) => {
     await context.supabase.from("ai_credentials").update({ is_active: false }).eq("user_id", context.userId);
-    const { error } = await supabaseAdmin
+    const { error } = await context.supabase
       .from("ai_credentials")
       .update({ is_active: true })
       .eq("id", data.id)
@@ -101,7 +101,7 @@ export const testAiCredentialFn = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
   .inputValidator((input: unknown) => IdSchema.parse(input))
   .handler(async ({ data, context }) => {
-    const { data: row, error } = await supabaseAdmin
+    const { data: row, error } = await context.supabase
       .from("ai_credentials")
       .select("label, base_url, model, api_key")
       .eq("id", data.id)
