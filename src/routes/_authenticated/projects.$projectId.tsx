@@ -1,11 +1,22 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useServerFn } from "@tanstack/react-start";
 import { toast } from "sonner";
-import { ArrowLeft, CalendarClock, ChevronDown, Download, Loader2, Play, Sparkles, Trophy } from "lucide-react";
+import {
+  ArrowLeft,
+  CalendarClock,
+  ChevronDown,
+  Download,
+  Loader2,
+  Play,
+  Sparkles,
+  Trophy,
+} from "lucide-react";
 import { ScheduleTikTokDialog } from "@/components/ScheduleTikTokDialog";
 import { AudioStrategySelector, type AudioSelection } from "@/components/AudioStrategySelector";
-import { resolveAudioUrl } from "@/lib/audio-url";
+import { resolveAudioForRender } from "@/lib/audio-url";
+import { prepareAudioForRenderFn } from "@/lib/audio.functions";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/useAuth";
 import { MediaLibraryPanel } from "@/components/MediaLibraryPanel";
@@ -30,7 +41,6 @@ import {
   STAGE_LABEL,
   reapStaleJobs,
   cancelQueuedJobs,
-
   runBatch,
   runMultiClipBatch,
   type BatchItem,
@@ -56,14 +66,19 @@ import { platformLabel, styleLabel } from "@/lib/constants";
 const QUANTITY_PRESETS = [1, 5, 10, 20, 30] as const;
 const MAX_QUANTITY = 30;
 
-
 export const Route = createFileRoute("/_authenticated/projects/$projectId")({
   head: () => ({
     meta: [
       { title: "Project workspace — Creative Factory" },
-      { name: "description", content: "Media, hooks, batch generation and render queue for this project." },
+      {
+        name: "description",
+        content: "Media, hooks, batch generation and render queue for this project.",
+      },
       { property: "og:title", content: "Project workspace — Creative Factory" },
-      { property: "og:description", content: "Produce short-form video batches from hooks and clips." },
+      {
+        property: "og:description",
+        content: "Produce short-form video batches from hooks and clips.",
+      },
     ],
   }),
   component: ProjectWorkspace,
@@ -74,9 +89,10 @@ function ProjectWorkspace() {
   const { user } = useAuth();
   const qc = useQueryClient();
   const [running, setRunning] = useState(false);
-  const [scheduleTarget, setScheduleTarget] = useState<{ id: string; hookText: string | null } | null>(
-    null,
-  );
+  const [scheduleTarget, setScheduleTarget] = useState<{
+    id: string;
+    hookText: string | null;
+  } | null>(null);
   const batchAbortRef = useRef<AbortController | null>(null);
   const dnaAbortRef = useRef<AbortController | null>(null);
   const [quantityChoice, setQuantityChoice] = useState("5");
@@ -98,6 +114,7 @@ function ProjectWorkspace() {
   // counts as the first one). Selectable instead of following the single-clip
   // batch quantity.
   const [dnaQuantity, setDnaQuantity] = useState("4");
+  const prepareAudioForRender = useServerFn(prepareAudioForRenderFn);
   const [audioSelection, setAudioSelection] = useState<AudioSelection>({
     strategy: "none",
     withAudio: false,
@@ -113,7 +130,6 @@ function ProjectWorkspace() {
     hook: { id: string; text: string };
   } | null>(null);
 
-
   const quantity = useMemo(() => {
     if (quantityChoice !== "custom") return Number(quantityChoice);
     const n = Math.round(Number(customQuantity));
@@ -126,7 +142,6 @@ function ProjectWorkspace() {
     if (!Number.isFinite(n)) return 1;
     return Math.min(MAX_QUANTITY, Math.max(1, n));
   }, [dnaQuantity]);
-
 
   // Abandoned jobs (closed tab, crashed render) must not sit in the queue forever.
   useEffect(() => {
@@ -188,7 +203,6 @@ function ProjectWorkspace() {
       return active ? 8000 : false;
     },
   });
-
 
   const mediaList = useMemo(() => data?.media ?? [], [data?.media]);
   const activeClipIds = useMemo(
@@ -305,8 +319,10 @@ function ProjectWorkspace() {
       const done = items.filter((i) => i.stage === "completed").length;
       const cancelled = items.some((i) => i.error === "Cancelled");
       const across = chosenAssets.length > 1 ? ` across ${chosenAssets.length} clips` : "";
-      if (cancelled) toast.info(`Cancelled — ${done} of ${count} variants had already finished${across}`);
-      else if (done === items.length) toast.success(`${done} of ${count} variants rendered${across}`);
+      if (cancelled)
+        toast.info(`Cancelled — ${done} of ${count} variants had already finished${across}`);
+      else if (done === items.length)
+        toast.success(`${done} of ${count} variants rendered${across}`);
       else toast.warning(`${done} of ${count} variants rendered — check the failed jobs`);
     } catch (e) {
       toast.error((e as Error).message);
@@ -325,9 +341,6 @@ function ProjectWorkspace() {
     toast.info("Render cancelled.");
   }
 
-
-
-
   /** Sign a playable URL for every DNA-tagged clip. Returns null (with a
    *  toast) if any clip's file can't be read from storage. */
   async function resolveDnaClips(): Promise<DnaClip[] | null> {
@@ -345,10 +358,10 @@ function ProjectWorkspace() {
     return ready;
   }
 
-  /** Resolves the currently-selected soundtrack (if any) to a playable URL. */
+  /** Resolves the currently-selected soundtrack (if any) to a render-safe URL. */
   async function resolveSoundtrack(): Promise<string | undefined> {
     if (!audioSelection.audio) return undefined;
-    const resolved = await resolveAudioUrl(audioSelection.audio);
+    const resolved = await resolveAudioForRender(audioSelection.audio, prepareAudioForRender);
     if (!resolved) throw new Error("The selected sound has no playable audio link — pick another.");
     return resolved;
   }
@@ -476,9 +489,12 @@ function ProjectWorkspace() {
       });
       const done = items.filter((i) => i.stage === "completed").length;
       const cancelled = items.some((i) => i.error === "Cancelled");
-      if (cancelled) toast.info(`Cancelled — ${done + 1} of ${dnaCount} DNA variants had already finished`);
-      else if (done === items.length) toast.success(`${done + 1} of ${dnaCount} DNA variants rendered`);
-      else toast.warning(`${done + 1} of ${dnaCount} DNA variants rendered — check the failed jobs`);
+      if (cancelled)
+        toast.info(`Cancelled — ${done + 1} of ${dnaCount} DNA variants had already finished`);
+      else if (done === items.length)
+        toast.success(`${done + 1} of ${dnaCount} DNA variants rendered`);
+      else
+        toast.warning(`${done + 1} of ${dnaCount} DNA variants rendered — check the failed jobs`);
     } catch (e) {
       toast.error((e as Error).message);
     } finally {
@@ -511,9 +527,11 @@ function ProjectWorkspace() {
     setDnaRunning(false);
     setDnaLive([]);
     toast.info("DNA render cancelled.");
-    if (user) void cancelQueuedJobs(user.id, projectId).then(() => qc.invalidateQueries({ queryKey: ["project", projectId] }));
+    if (user)
+      void cancelQueuedJobs(user.id, projectId).then(() =>
+        qc.invalidateQueries({ queryKey: ["project", projectId] }),
+      );
   }
-
 
   async function clearQueue() {
     if (!user) return;
@@ -524,9 +542,6 @@ function ProjectWorkspace() {
     if (ok) toast.info("Queued renders cancelled.");
     else toast.error("Could not cancel the queued renders.");
   }
-
-
-
 
   if (isLoading) {
     return (
@@ -559,7 +574,6 @@ function ProjectWorkspace() {
   const activeJobs = allJobs.filter((j) => j.status === "queued" || j.status === "processing");
   const finishedJobs = allJobs.filter((j) => j.status !== "queued" && j.status !== "processing");
   const queuedCount = activeJobs.length;
-
 
   return (
     <div className="space-y-8">
@@ -608,7 +622,11 @@ function ProjectWorkspace() {
                 />
               </div>
             ) : null}
-            <Button className="w-full sm:w-auto" onClick={() => void generateBatch()} disabled={running}>
+            <Button
+              className="w-full sm:w-auto"
+              onClick={() => void generateBatch()}
+              disabled={running}
+            >
               {running ? <Loader2 className="size-4 animate-spin" /> : <Play className="size-4" />}
               Render {quantity} variant{quantity === 1 ? "" : "s"}
             </Button>
@@ -619,7 +637,6 @@ function ProjectWorkspace() {
             ) : null}
           </div>
         }
-
       />
 
       <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
@@ -631,19 +648,19 @@ function ProjectWorkspace() {
           icon={Trophy}
         />
         <div className="space-y-2">
-          <StatCard
-            label="Queue"
-            value={queuedCount}
-            icon={Loader2}
-          />
+          <StatCard label="Queue" value={queuedCount} icon={Loader2} />
           {queuedCount > 0 ? (
-            <Button variant="outline" size="sm" className="w-full" onClick={() => void clearQueue()}>
+            <Button
+              variant="outline"
+              size="sm"
+              className="w-full"
+              onClick={() => void clearQueue()}
+            >
               Cancel {queuedCount} queued render{queuedCount === 1 ? "" : "s"}
             </Button>
           ) : null}
         </div>
       </div>
-
 
       {requested > 0 ? (
         <div className="panel px-5 py-4 text-xs">
@@ -652,7 +669,8 @@ function ProjectWorkspace() {
           </p>
           {failed.length > 0 ? (
             <p className="mt-1 text-destructive">
-              Failed jobs: {failed.map((f) => `${f.jobId.slice(0, 8)} (${f.error ?? "unknown"})`).join(" · ")}
+              Failed jobs:{" "}
+              {failed.map((f) => `${f.jobId.slice(0, 8)} (${f.error ?? "unknown"})`).join(" · ")}
             </p>
           ) : null}
           <div className="mt-3 space-y-2">
@@ -774,7 +792,6 @@ function ProjectWorkspace() {
           ) : null}
         </div>
 
-
         {!dnaRoles.ok ? (
           <p className="text-xs text-destructive">{dnaRoles.reason}</p>
         ) : (
@@ -819,7 +836,11 @@ function ProjectWorkspace() {
               </div>
             </div>
             <div className="flex flex-wrap gap-2">
-              <Button className="w-full sm:w-auto" onClick={() => void approveDna()} disabled={dnaRunning}>
+              <Button
+                className="w-full sm:w-auto"
+                onClick={() => void approveDna()}
+                disabled={dnaRunning}
+              >
                 {dnaRunning ? (
                   <Loader2 className="size-4 animate-spin" />
                 ) : (
@@ -827,14 +848,18 @@ function ProjectWorkspace() {
                 )}
                 Approve this style — render {Math.max(0, dnaCount - 1)} more
               </Button>
-              <Button className="w-full sm:w-auto" variant="ghost" onClick={() => void discardDnaPreview()} disabled={dnaRunning}>
+              <Button
+                className="w-full sm:w-auto"
+                variant="ghost"
+                onClick={() => void discardDnaPreview()}
+                disabled={dnaRunning}
+              >
                 Discard preview
               </Button>
             </div>
           </div>
         ) : null}
       </div>
-
 
       <Tabs defaultValue="hooks">
         <TabsList>
@@ -863,30 +888,34 @@ function ProjectWorkspace() {
         <TabsContent value="renders" className="space-y-6 pt-6">
           <div className="panel divide-y divide-border overflow-hidden">
             {activeJobs.length + finishedJobs.length === 0 ? (
-              <p className="px-5 py-8 text-center text-xs text-muted-foreground">No render jobs yet.</p>
+              <p className="px-5 py-8 text-center text-xs text-muted-foreground">
+                No render jobs yet.
+              </p>
             ) : (
               <>
-                {[...activeJobs, ...(showJobHistory ? finishedJobs : finishedJobs.slice(0, 1))].map((j) => (
-                  <div key={j.id} className="px-5 py-4">
-                    <div className="flex items-center justify-between gap-3">
-                      <span className="font-mono text-xs text-muted-foreground">{j.id.slice(0, 8)}</span>
-                      <StatusPill status={j.status} />
+                {[...activeJobs, ...(showJobHistory ? finishedJobs : finishedJobs.slice(0, 1))].map(
+                  (j) => (
+                    <div key={j.id} className="px-5 py-4">
+                      <div className="flex items-center justify-between gap-3">
+                        <span className="font-mono text-xs text-muted-foreground">
+                          {j.id.slice(0, 8)}
+                        </span>
+                        <StatusPill status={j.status} />
+                      </div>
+                      <Progress value={j.progress} className="mt-3 h-1.5" />
+                      {j.error_message ? (
+                        <p className="mt-2 text-[11px] text-destructive">{j.error_message}</p>
+                      ) : null}
                     </div>
-                    <Progress value={j.progress} className="mt-3 h-1.5" />
-                    {j.error_message ? (
-                      <p className="mt-2 text-[11px] text-destructive">{j.error_message}</p>
-                    ) : null}
-                  </div>
-                ))}
+                  ),
+                )}
                 {finishedJobs.length > 1 ? (
                   <button
                     type="button"
                     onClick={() => setShowJobHistory((v) => !v)}
                     className="flex w-full items-center justify-center gap-1.5 px-5 py-3 text-xs text-muted-foreground hover:text-foreground"
                   >
-                    {showJobHistory
-                      ? "Hide history"
-                      : `History — ${finishedJobs.length - 1} more`}
+                    {showJobHistory ? "Hide history" : `History — ${finishedJobs.length - 1} more`}
                     <ChevronDown
                       className={`size-3.5 transition-transform ${showJobHistory ? "rotate-180" : ""}`}
                     />
@@ -895,8 +924,6 @@ function ProjectWorkspace() {
               </>
             )}
           </div>
-
-
 
           <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
             {data?.videos.map((v) => (
@@ -938,7 +965,9 @@ function ProjectWorkspace() {
                     {v.playbackUrl ? (
                       <Button
                         size="sm"
-                        onClick={() => setScheduleTarget({ id: v.id, hookText: v.hook_text ?? null })}
+                        onClick={() =>
+                          setScheduleTarget({ id: v.id, hookText: v.hook_text ?? null })
+                        }
                       >
                         <CalendarClock className="size-3.5" />
                         Schedule
