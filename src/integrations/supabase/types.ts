@@ -1008,7 +1008,10 @@ export type Database = {
       [_ in never]: never
     }
     Functions: {
-      [_ in never]: never
+      replace_trending_audios: {
+        Args: { _platform: string; _region: string; _rows: Json }
+        Returns: number
+      }
     }
     Enums: {
       [_ in never]: never
