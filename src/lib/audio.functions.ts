@@ -35,6 +35,7 @@ export const getTrendingAudiosFn = createServerFn({ method: "GET" })
     let q = context.supabase
       .from("trending_audios")
       .select(AUDIO_COLUMNS)
+      .neq("source", "seed_placeholder")
       .order("virality_score", { ascending: false });
     if (data.region) q = q.eq("region", data.region);
     const { data: rows, error } = await q;
@@ -50,6 +51,7 @@ export const getMyAudioLibraryFn = createServerFn({ method: "GET" })
       .from("trending_audios")
       .select(AUDIO_COLUMNS)
       .eq("user_id", context.userId)
+      .neq("source", "seed_placeholder")
       .order("created_at", { ascending: false });
     if (error) throw new Error(error.message);
     return { audios: (rows ?? []) as TrendingAudioRow[] };
@@ -172,8 +174,49 @@ export const getAutoPickAudioFn = createServerFn({ method: "GET" })
       .from("trending_audios")
       .select(AUDIO_COLUMNS)
       .eq("region", data.region ?? "global")
+      .neq("source", "seed_placeholder")
       .order("virality_score", { ascending: false })
       .limit(1);
     if (error) throw new Error(error.message);
     return { audio: (rows?.[0] ?? null) as TrendingAudioRow | null };
+  });
+
+/** Save an audio file the browser already uploaded to the "media" bucket. */
+export const addUploadedAudioFn = createServerFn({ method: "POST" })
+  .middleware([requireSupabaseAuth])
+  .inputValidator(
+    (input: {
+      title: string;
+      author?: string;
+      storagePath: string;
+      durationSeconds?: number;
+      category?: string;
+      region?: string;
+    }) => input,
+  )
+  .handler(async ({ data, context }) => {
+    if (!data.title.trim()) throw new Error("Give this sound a title.");
+    // The storage policy only lets a user write under their own id folder, so
+    // refuse a path that isn't in it rather than store a dead reference.
+    if (!data.storagePath.startsWith(`${context.userId}/`)) {
+      throw new Error("That upload isn't in your own folder.");
+    }
+    const { data: row, error } = await context.supabase
+      .from("trending_audios")
+      .insert({
+        user_id: context.userId,
+        platform: "tiktok",
+        region: data.region ?? "global",
+        title: data.title.trim(),
+        author: data.author?.trim() || null,
+        storage_path: data.storagePath,
+        audio_url: null,
+        duration_seconds: data.durationSeconds ?? null,
+        trend_label: data.category ?? "TikTok Audio",
+        source: "upload",
+      })
+      .select(AUDIO_COLUMNS)
+      .single();
+    if (error || !row) throw new Error(error?.message ?? "Could not save this sound.");
+    return { audio: row as TrendingAudioRow };
   });
