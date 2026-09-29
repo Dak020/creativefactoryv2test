@@ -14,6 +14,8 @@ export type TrendingAudioRow = {
   virality_score: number;
   trend_rate: number;
   trend_label: string | null;
+  external_id: string | null;
+  source_url: string | null;
   source: string;
   is_favorite: boolean;
   user_id: string | null;
@@ -21,7 +23,7 @@ export type TrendingAudioRow = {
 };
 
 const AUDIO_COLUMNS =
-  "id, platform, region, title, author, audio_url, storage_path, cover_url, duration_seconds, virality_score, trend_rate, trend_label, source, is_favorite, user_id, created_at";
+  "id, platform, region, title, author, audio_url, storage_path, cover_url, duration_seconds, virality_score, trend_rate, trend_label, external_id, source_url, source, is_favorite, user_id, created_at";
 
 /**
  * Trending tracks for a region, highest virality first. RLS already limits
@@ -219,4 +221,139 @@ export const addUploadedAudioFn = createServerFn({ method: "POST" })
       .single();
     if (error || !row) throw new Error(error?.message ?? "Could not save this sound.");
     return { audio: row as TrendingAudioRow };
+  });
+
+/**
+ * Refresh the shared (system-wide) trending chart for a region from Apify,
+ * via the security-definer RPC (regular users can't INSERT user_id-null rows
+ * directly under RLS). Reports the number of rows the sync actually wrote,
+ * not just how many candidates Apify returned — a batch can come back
+ * non-empty and still insert zero if every title was blank.
+ */
+export const syncTrendingAudiosFn = createServerFn({ method: "POST" })
+  .middleware([requireSupabaseAuth])
+  .inputValidator((input: { region?: string } | undefined) => input ?? {})
+  .handler(async ({ data, context }) => {
+    const region = data.region ?? "global";
+    const { fetchTrendingSounds } = await import("@/lib/audio/tiktok-sounds.server");
+    const sounds = await fetchTrendingSounds(region, 40);
+    if (sounds.length === 0) {
+      return { count: 0, message: "No trending sounds found for this region right now." };
+    }
+    const { data: count, error } = await context.supabase.rpc("replace_trending_audios", {
+      _platform: "tiktok",
+      _region: region,
+      _rows: sounds,
+    });
+    if (error) throw new Error(error.message);
+    if (!count) {
+      return {
+        count: 0,
+        message: "The trending-sound service returned no usable tracks this time.",
+      };
+    }
+    return { count };
+  });
+
+/**
+ * Import a TikTok video or sound link: resolve it to its underlying audio,
+ * download the file server-side (avoids CORS and the source link expiring),
+ * store it in the user's own media/ folder, and save it to their library.
+ */
+export const importTikTokUrlAudioFn = createServerFn({ method: "POST" })
+  .middleware([requireSupabaseAuth])
+  .inputValidator((input: { url: string; title?: string }) => input)
+  .handler(async ({ data, context }) => {
+    const trimmed = data.url.trim();
+    if (!/^https?:\/\/(www\.|vm\.|vt\.)?tiktok\.com\//i.test(trimmed)) {
+      throw new Error("That doesn't look like a TikTok link.");
+    }
+    const { resolveTikTokLink, downloadAudio } = await import("@/lib/audio/tiktok-sounds.server");
+    const resolved = await resolveTikTokLink(trimmed);
+    if (!resolved?.audioUrl) {
+      throw new Error("Could not extract audio from that TikTok link. Please verify the URL.");
+    }
+
+    const { bytes, contentType } = await downloadAudio(resolved.audioUrl);
+    const storagePath = `${context.userId}/audio-${crypto.randomUUID()}.mp3`;
+
+    const { error: uploadError } = await context.supabase.storage
+      .from("media")
+      .upload(storagePath, bytes, { contentType, upsert: true });
+    if (uploadError) throw new Error(`Failed to save extracted sound: ${uploadError.message}`);
+
+    const { data: row, error: insertError } = await context.supabase
+      .from("trending_audios")
+      .insert({
+        user_id: context.userId,
+        platform: "tiktok",
+        region: "global",
+        title: (data.title?.trim() || resolved.title || "TikTok Audio").slice(0, 200),
+        author: resolved.author?.slice(0, 120) || null,
+        storage_path: storagePath,
+        audio_url: null,
+        cover_url: resolved.coverUrl || null,
+        duration_seconds: resolved.durationSeconds || null,
+        external_id: resolved.externalId || null,
+        source_url: resolved.sourceUrl || trimmed,
+        source: "tiktok_link",
+        trend_label: "Imported Sound",
+      })
+      .select(AUDIO_COLUMNS)
+      .single();
+
+    if (insertError || !row) {
+      // The DB row failed — don't leave the file orphaned in storage.
+      await context.supabase.storage.from("media").remove([storagePath]);
+      throw new Error(insertError?.message ?? "Failed to save to library.");
+    }
+    return { audio: row as TrendingAudioRow };
+  });
+
+/**
+ * Ensure a track has a CORS-safe, storage-backed URL before it's used in a
+ * render. A track that already has storage_path just gets re-signed; an
+ * external (audio_url-only) track is downloaded and cached into the media
+ * bucket once, and the row is updated so every future render reuses the
+ * cached copy instead of re-downloading it.
+ */
+export const prepareAudioForRenderFn = createServerFn({ method: "POST" })
+  .middleware([requireSupabaseAuth])
+  .inputValidator((input: { audioId: string }) => input)
+  .handler(async ({ data, context }) => {
+    const { data: audio, error } = await context.supabase
+      .from("trending_audios")
+      .select("id, storage_path, audio_url")
+      .eq("id", data.audioId)
+      .single();
+    if (error || !audio) throw new Error("Audio track not found.");
+
+    if (audio.storage_path) {
+      const { data: signed } = await context.supabase.storage
+        .from("media")
+        .createSignedUrl(audio.storage_path, 60 * 60 * 6);
+      return { url: signed?.signedUrl ?? null };
+    }
+
+    if (!audio.audio_url) return { url: null };
+
+    const { downloadAudio } = await import("@/lib/audio/tiktok-sounds.server");
+    const { bytes, contentType } = await downloadAudio(audio.audio_url);
+    const storagePath = `${context.userId}/cache-${crypto.randomUUID()}.mp3`;
+    const { error: upErr } = await context.supabase.storage
+      .from("media")
+      .upload(storagePath, bytes, { contentType, upsert: true });
+    if (upErr) throw new Error(`Could not prepare this sound: ${upErr.message}`);
+
+    // Best-effort: if this fails the render can still proceed on the signed
+    // URL below, it just won't be cached for next time.
+    await context.supabase
+      .from("trending_audios")
+      .update({ storage_path: storagePath })
+      .eq("id", audio.id);
+
+    const { data: signed } = await context.supabase.storage
+      .from("media")
+      .createSignedUrl(storagePath, 60 * 60 * 6);
+    return { url: signed?.signedUrl ?? null };
   });
