@@ -1,11 +1,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createFileRoute } from "@tanstack/react-router";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useServerFn } from "@tanstack/react-start";
 import { toast } from "sonner";
 import { CalendarClock, Download, Film, Loader2, Plus, Trophy, Upload, Wand2 } from "lucide-react";
 import { ScheduleTikTokDialog } from "@/components/ScheduleTikTokDialog";
 import { AudioStrategySelector, type AudioSelection } from "@/components/AudioStrategySelector";
-import { resolveAudioUrl } from "@/lib/audio-url";
+import { resolveAudioForRender } from "@/lib/audio-url";
+import { prepareAudioForRenderFn } from "@/lib/audio.functions";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/useAuth";
 import { EmptyState, PageHeader, StatusPill } from "@/components/ui-kit";
@@ -41,7 +43,6 @@ import { DeleteRenderButton } from "@/components/DeleteRenderButton";
 import { RenderPlayer } from "@/components/RenderPlayer";
 import { downloadRender, renderFilename, resolveRenderUrl } from "@/lib/render/output";
 
-
 const QUANTITY_PRESETS = [1, 5, 10, 20, 30] as const;
 const MAX_HOOKS = 10;
 const MAX_QUANTITY = 30;
@@ -61,7 +62,8 @@ export const Route = createFileRoute("/_authenticated/studio")({
       { property: "og:title", content: "Studio — Creative Factory" },
       {
         property: "og:description",
-        content: "The complete upload, hook selection, batch render, download and cleanup workflow.",
+        content:
+          "The complete upload, hook selection, batch render, download and cleanup workflow.",
       },
       { property: "og:type", content: "website" },
       { name: "twitter:card", content: "summary_large_image" },
@@ -79,9 +81,10 @@ function StudioPage() {
 
   const [uploading, setUploading] = useState(false);
   const [assetId, setAssetId] = useState<string | null>(null);
-  const [scheduleTarget, setScheduleTarget] = useState<{ id: string; hookText: string | null } | null>(
-    null,
-  );
+  const [scheduleTarget, setScheduleTarget] = useState<{
+    id: string;
+    hookText: string | null;
+  } | null>(null);
   const [selected, setSelected] = useState<string[]>([]);
   const [live, setLive] = useState<BatchItem[]>([]);
   const [rendering, setRendering] = useState(false);
@@ -107,12 +110,8 @@ function StudioPage() {
   // Jobs abandoned by a closed tab must not linger as "in progress" after a refresh.
   useEffect(() => {
     if (!user) return;
-    void reapStaleJobs(user.id).then(() =>
-      qc.invalidateQueries({ queryKey: ["studio-results"] }),
-    );
+    void reapStaleJobs(user.id).then(() => qc.invalidateQueries({ queryKey: ["studio-results"] }));
   }, [user?.id, qc]);
-
-
 
   // Studio can scope itself to a specific project's own media and hooks —
   // pick one from this selector, same idea as the Project page already
@@ -179,7 +178,6 @@ function StudioPage() {
     enabled: Boolean(user),
     staleTime: 15_000,
     queryFn: async (): Promise<ResultCard[]> => {
-
       const [videos, failedJobs] = await Promise.all([
         supabase
           .from("generated_videos")
@@ -190,7 +188,9 @@ function StudioPage() {
           .limit(30),
         supabase
           .from("render_jobs")
-          .select("id, status, error_message, created_at, video_recipes(overlay_text, media_asset_id)")
+          .select(
+            "id, status, error_message, created_at, video_recipes(overlay_text, media_asset_id)",
+          )
           .eq("status", "failed")
           .order("created_at", { ascending: false })
           .limit(12),
@@ -231,7 +231,8 @@ function StudioPage() {
           hookText:
             (j.video_recipes as { overlay_text?: string } | null)?.overlay_text ?? "Untitled hook",
           sourceName: "Source clip",
-          sourceAssetId: (j.video_recipes as { media_asset_id?: string } | null)?.media_asset_id ?? "",
+          sourceAssetId:
+            (j.video_recipes as { media_asset_id?: string } | null)?.media_asset_id ?? "",
           durationSeconds: CLIP_SECONDS,
           createdAt: j.created_at,
           outputPath: null,
@@ -280,6 +281,7 @@ function StudioPage() {
   // single clip picked above.
   const [multiClipMode, setMultiClipMode] = useState(false);
   const search = Route.useSearch();
+  const prepareAudioForRender = useServerFn(prepareAudioForRenderFn);
   const [audioSelection, setAudioSelection] = useState<AudioSelection>({
     strategy: "none",
     withAudio: false,
@@ -287,7 +289,9 @@ function StudioPage() {
   });
   const [selectedClipIds, setSelectedClipIds] = useState<string[]>([]);
   function toggleClipSelected(id: string) {
-    setSelectedClipIds((prev) => (prev.includes(id) ? prev.filter((c) => c !== id) : [...prev, id]));
+    setSelectedClipIds((prev) =>
+      prev.includes(id) ? prev.filter((c) => c !== id) : [...prev, id],
+    );
   }
 
   const onUpload = useCallback(
@@ -412,11 +416,12 @@ function StudioPage() {
       return;
     }
 
-    // Resolve the chosen soundtrack (if any) to a playable URL once, up
-    // front, so every variant in this batch bakes in the same track.
+    // Resolve the chosen soundtrack (if any) to a render-safe URL once, up
+    // front, so every variant in this batch bakes in the same track. This
+    // may download and cache an external track server-side the first time.
     let soundtrackUrl: string | undefined;
     if (audioSelection.audio) {
-      const resolved = await resolveAudioUrl(audioSelection.audio);
+      const resolved = await resolveAudioForRender(audioSelection.audio, prepareAudioForRender);
       if (!resolved) {
         toast.error("The selected sound has no playable audio link — pick another.");
         return;
@@ -474,8 +479,10 @@ function StudioPage() {
         });
         const done = items.filter((i) => i.stage === "completed").length;
         const cancelled = items.some((i) => i.error === "Cancelled");
-        if (cancelled) toast.info(`Cancelled — ${done} of ${quantity} variants had already finished`);
-        else if (done === items.length) toast.success(`${done} of ${quantity} variants rendered across ${ready.length} clips`);
+        if (cancelled)
+          toast.info(`Cancelled — ${done} of ${quantity} variants had already finished`);
+        else if (done === items.length)
+          toast.success(`${done} of ${quantity} variants rendered across ${ready.length} clips`);
         else toast.warning(`${done} of ${quantity} variants rendered — see the failed cards below`);
       } catch (e) {
         toast.error((e as Error).message);
@@ -582,7 +589,8 @@ function StudioPage() {
           </SelectContent>
         </Select>
         <p className="text-xs text-muted-foreground">
-          Clips, hooks, and renders you add here go into this project — switch to see or work on a different one.
+          Clips, hooks, and renders you add here go into this project — switch to see or work on a
+          different one.
         </p>
       </div>
 
@@ -591,10 +599,16 @@ function StudioPage() {
         <div className="flex items-center justify-between gap-4">
           <div>
             <h2 className="text-sm font-semibold">1. Source video</h2>
-            <p className="text-xs text-muted-foreground">One MP4 or MOV clip powers the whole batch.</p>
+            <p className="text-xs text-muted-foreground">
+              One MP4 or MOV clip powers the whole batch.
+            </p>
           </div>
           <Button onClick={() => fileRef.current?.click()} disabled={uploading} variant="secondary">
-            {uploading ? <Loader2 className="size-4 animate-spin" /> : <Upload className="size-4" />}
+            {uploading ? (
+              <Loader2 className="size-4 animate-spin" />
+            ) : (
+              <Upload className="size-4" />
+            )}
             Upload video
           </Button>
           <input
@@ -622,7 +636,6 @@ function StudioPage() {
                 preload="metadata"
                 className="aspect-[9/16] w-full bg-black object-contain"
               />
-
             ) : (
               <div className="flex aspect-[9/16] items-center justify-center text-xs text-muted-foreground">
                 No source video
@@ -635,7 +648,8 @@ function StudioPage() {
                 <p className="font-medium">{asset.filename}</p>
                 <p className="text-xs text-muted-foreground">
                   Duration {fmtDuration(asset.duration)} · output {OUT_W}×{OUT_H} ·{" "}
-                  {Math.round(Math.min(Number(asset.duration ?? CLIP_SECONDS), CLIP_SECONDS))}s per variant
+                  {Math.round(Math.min(Number(asset.duration ?? CLIP_SECONDS), CLIP_SECONDS))}s per
+                  variant
                 </p>
               </div>
             ) : (
@@ -667,8 +681,8 @@ function StudioPage() {
                 {multiClipMode && (
                   <>
                     <p className="text-xs text-muted-foreground">
-                      Pick 2 or more clips — the batch splits evenly across them (any remainder goes to a
-                      random pick). Each clip renders with its own saved hook placement.
+                      Pick 2 or more clips — the batch splits evenly across them (any remainder goes
+                      to a random pick). Each clip renders with its own saved hook placement.
                     </p>
                     <div className="max-h-48 space-y-1 overflow-y-auto">
                       {(assets ?? []).map((a) => (
@@ -681,13 +695,16 @@ function StudioPage() {
                             onCheckedChange={() => toggleClipSelected(a.id)}
                           />
                           <span className="min-w-0 flex-1 truncate">{a.filename}</span>
-                          <span className="text-xs text-muted-foreground">{fmtDuration(a.duration)}</span>
+                          <span className="text-xs text-muted-foreground">
+                            {fmtDuration(a.duration)}
+                          </span>
                         </label>
                       ))}
                     </div>
                     {selectedClipIds.length > 0 && (
                       <p className="text-xs text-muted-foreground">
-                        {selectedClipIds.length} clip{selectedClipIds.length === 1 ? "" : "s"} selected
+                        {selectedClipIds.length} clip{selectedClipIds.length === 1 ? "" : "s"}{" "}
+                        selected
                       </p>
                     )}
                   </>
@@ -752,7 +769,11 @@ function StudioPage() {
               <Switch checked={winner} onCheckedChange={setWinner} />
             </div>
             <Button onClick={() => void saveHook()} disabled={savingHook} className="w-full">
-              {savingHook ? <Loader2 className="size-4 animate-spin" /> : <Plus className="size-4" />}
+              {savingHook ? (
+                <Loader2 className="size-4 animate-spin" />
+              ) : (
+                <Plus className="size-4" />
+              )}
               Save hook
             </Button>
           </div>
@@ -798,8 +819,8 @@ function StudioPage() {
         <div>
           <h2 className="text-sm font-semibold">3. Create the batch</h2>
           <p className="text-xs text-muted-foreground">
-            Each variant trims a different section (up to {CLIP_SECONDS}s — shorter clips keep their full
-            length) and burns one hook into the exported file.
+            Each variant trims a different section (up to {CLIP_SECONDS}s — shorter clips keep their
+            full length) and burns one hook into the exported file.
           </p>
         </div>
 
@@ -921,9 +942,10 @@ function StudioPage() {
                         size="sm"
                         variant="secondary"
                         onClick={() =>
-                          void downloadRender(b.url!, b.filename ?? `hook-variant-${i + 1}.mp4`).catch((e) =>
-                            toast.error((e as Error).message),
-                          )
+                          void downloadRender(
+                            b.url!,
+                            b.filename ?? `hook-variant-${i + 1}.mp4`,
+                          ).catch((e) => toast.error((e as Error).message))
                         }
                       >
                         <Download className="size-3.5" />
@@ -941,9 +963,7 @@ function StudioPage() {
                         Schedule
                       </Button>
                     ) : null}
-                    {b.videoId ? (
-                      <DeleteRenderButton onConfirm={() => removeResult(b)} />
-                    ) : null}
+                    {b.videoId ? <DeleteRenderButton onConfirm={() => removeResult(b)} /> : null}
                   </div>
                 </div>
 
