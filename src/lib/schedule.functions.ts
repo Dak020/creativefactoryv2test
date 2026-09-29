@@ -66,10 +66,9 @@ async function buildCaption(
 }
 
 /** A long-lived signed URL the posting API (or our own server) can fetch the rendered file from. */
-async function signRenderUrl(path: string) {
+async function signRenderUrl(supabase: any, path: string) {
   if (/^https?:\/\//i.test(path)) return path;
-  const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
-  const { data, error } = await supabaseAdmin.storage
+  const { data, error } = await supabase.storage
     .from("renders")
     .createSignedUrl(path, 60 * 60 * 24 * 7);
   if (error || !data?.signedUrl) {
@@ -160,7 +159,7 @@ async function dispatchRow(
   await context.supabase.from("scheduled_posts").update({ status: "posting" }).eq("id", row.id);
 
   try {
-    const videoUrl = await signRenderUrl(video.output_url);
+    const videoUrl = await signRenderUrl(context.supabase, video.output_url);
 
     if (account.driver === "tiktok") {
       // Direct TikTok posting has no "hold and publish later" concept — it
