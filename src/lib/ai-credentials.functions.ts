@@ -40,11 +40,10 @@ export const saveAiCredentialFn = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
   .inputValidator((input: unknown) => SaveSchema.parse(input))
   .handler(async ({ data, context }) => {
-    const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
     const userId = context.userId;
 
     if (data.makeActive) {
-      await supabaseAdmin.from("ai_credentials").update({ is_active: false }).eq("user_id", userId);
+      await context.supabase.from("ai_credentials").update({ is_active: false }).eq("user_id", userId);
     }
 
     const { data: row, error } = await supabaseAdmin
@@ -70,8 +69,7 @@ export const activateAiCredentialFn = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
   .inputValidator((input: unknown) => IdSchema.parse(input))
   .handler(async ({ data, context }) => {
-    const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
-    await supabaseAdmin.from("ai_credentials").update({ is_active: false }).eq("user_id", context.userId);
+    await context.supabase.from("ai_credentials").update({ is_active: false }).eq("user_id", context.userId);
     const { error } = await supabaseAdmin
       .from("ai_credentials")
       .update({ is_active: true })
@@ -85,8 +83,7 @@ export const activateAiCredentialFn = createServerFn({ method: "POST" })
 export const useBuiltInAiFn = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
   .handler(async ({ context }) => {
-    const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
-    await supabaseAdmin.from("ai_credentials").update({ is_active: false }).eq("user_id", context.userId);
+    await context.supabase.from("ai_credentials").update({ is_active: false }).eq("user_id", context.userId);
     return { ok: true };
   });
 
@@ -104,7 +101,6 @@ export const testAiCredentialFn = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
   .inputValidator((input: unknown) => IdSchema.parse(input))
   .handler(async ({ data, context }) => {
-    const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
     const { data: row, error } = await supabaseAdmin
       .from("ai_credentials")
       .select("label, base_url, model, api_key")

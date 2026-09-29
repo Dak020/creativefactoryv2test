@@ -41,7 +41,7 @@ export const generateHooksFn = createServerFn({ method: "POST" })
 
     const { generateHooks } = await import("./ai/hooks-service.server");
     const { getProviderForUser } = await import("./ai/provider.server");
-    const provider = await getProviderForUser(userId);
+    const provider = await getProviderForUser(userId, supabase);
     const generated = await generateHooks({
       product: data.product,
       brandContext: data.brandContext ?? null,
@@ -90,7 +90,7 @@ export const scoreHooksFn = createServerFn({ method: "POST" })
   .handler(async ({ data, context }) => {
     const { scoreHooks } = await import("./ai/hooks-service.server");
     const { getProviderForUser } = await import("./ai/provider.server");
-    const provider = await getProviderForUser(context.userId);
+    const provider = await getProviderForUser(context.userId, context.supabase);
     return { scores: await scoreHooks(data.texts, data.audience, data.platform, provider) };
   });
 
@@ -110,7 +110,7 @@ export const studyWinnersFn = createServerFn({ method: "POST" })
     const { supabase, userId } = context;
     const { analyzeHookStructure } = await import("./ai/hooks-service.server");
     const { getProviderForUser } = await import("./ai/provider.server");
-    const provider = await getProviderForUser(userId);
+    const provider = await getProviderForUser(userId, supabase);
 
     const analysis = await analyzeHookStructure(
       data.texts.map((t) => ({ text: t })),
