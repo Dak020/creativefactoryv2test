@@ -4,13 +4,14 @@ import { useServerFn } from "@tanstack/react-start";
 import { useNavigate } from "@tanstack/react-router";
 import { toast } from "sonner";
 import {
+  Bookmark,
+  Check,
   Flame,
   Link2,
   Loader2,
   Pause,
   Play,
   RefreshCw,
-  Star,
   Trash2,
   TrendingUp,
   Upload,
@@ -85,18 +86,20 @@ function ViralityBadge({ audio }: { audio: TrendingAudioRow }) {
 function AudioCard({
   audio,
   playingId,
+  isSaved,
   onPlayToggle,
-  onFavorite,
-  favoritePending,
+  onSave,
+  savePending,
   onDelete,
   deletePending,
   canDelete,
 }: {
   audio: TrendingAudioRow;
   playingId: string | null;
+  isSaved: boolean;
   onPlayToggle: (audio: TrendingAudioRow) => void;
-  onFavorite: (audio: TrendingAudioRow) => void;
-  favoritePending: boolean;
+  onSave: (audio: TrendingAudioRow) => void;
+  savePending: boolean;
   onDelete: (audio: TrendingAudioRow) => void;
   deletePending: boolean;
   canDelete: boolean;
@@ -123,41 +126,59 @@ function AudioCard({
             {audio.duration_seconds ? ` · ${fmtDuration(audio.duration_seconds)}` : ""}
           </p>
         </div>
-        <button
-          type="button"
-          aria-label={audio.is_favorite ? "Remove favorite" : "Mark as favorite"}
-          onClick={() => onFavorite(audio)}
-          disabled={favoritePending}
-          className="mt-0.5 shrink-0"
-        >
-          <Star
-            className={
-              audio.is_favorite
-                ? "h-4 w-4 fill-amber-400 text-amber-400"
-                : "h-4 w-4 text-muted-foreground"
-            }
-          />
-        </button>
       </div>
 
       <ViralityBadge audio={audio} />
 
-      <div className="flex items-center gap-2">
+      <div className="flex flex-wrap items-center gap-2">
         <Button variant="outline" size="sm" onClick={() => onPlayToggle(audio)} className="gap-1.5">
           {isPlaying ? <Pause className="h-3.5 w-3.5" /> : <Play className="h-3.5 w-3.5" />}
           {isPlaying ? "Pause" : "Preview"}
         </Button>
-        <Button
-          size="sm"
-          onClick={() => navigate({ to: "/studio", search: { audioId: audio.id } })}
-        >
-          Use in Studio
-        </Button>
+
+        {canDelete ? (
+          <Button
+            size="sm"
+            onClick={() => navigate({ to: "/studio", search: { audioId: audio.id } })}
+          >
+            Use in Studio
+          </Button>
+        ) : isSaved ? (
+          <Badge
+            variant="outline"
+            className="h-8 gap-1 border-emerald-500/40 bg-emerald-500/10 px-2.5 text-xs text-emerald-600 dark:text-emerald-400"
+          >
+            <Check className="h-3 w-3" />
+            Saved in Library
+          </Badge>
+        ) : (
+          <Button
+            variant="secondary"
+            size="sm"
+            onClick={() => onSave(audio)}
+            disabled={savePending}
+            className="gap-1.5"
+          >
+            <Bookmark className="h-3.5 w-3.5" />
+            Save to Library
+          </Button>
+        )}
+
+        {!canDelete && (
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={() => navigate({ to: "/studio", search: { audioId: audio.id } })}
+          >
+            Use in Studio
+          </Button>
+        )}
+
         {canDelete ? (
           <Button
             variant="ghost"
             size="icon"
-            className="ml-auto"
+            className="ml-auto text-destructive hover:bg-destructive/10"
             aria-label="Delete sound"
             onClick={() => onDelete(audio)}
             disabled={deletePending}
@@ -205,7 +226,6 @@ export function AudioLibraryPanel() {
   const mineQ = useQuery({
     queryKey: ["my-audio-library"],
     queryFn: () => getMyLibrary(),
-    enabled: tab === "mine",
   });
 
   // The trending tabs are for curated (system-wide) sounds. Your own uploads
@@ -229,9 +249,6 @@ export function AudioLibraryPanel() {
   const deleteMut = useMutation({
     mutationFn: async (audio: TrendingAudioRow) => {
       await deleteCustom({ data: { id: audio.id } });
-      // An uploaded file is ours alone, so remove it from storage too. Other
-      // rows (favorited copies of a system sound) share a file with the
-      // original and must never delete it.
       if (audio.source === "upload" && audio.storage_path) {
         await supabase.storage.from("media").remove([audio.storage_path]);
       }
@@ -283,7 +300,6 @@ export function AudioLibraryPanel() {
     setUploading(true);
     let path: string | null = null;
     try {
-      // Read the length from the file itself (0 if the browser can't decode it).
       const objectUrl = URL.createObjectURL(file);
       const duration = await new Promise<number>((resolve) => {
         const probe = new Audio();
@@ -300,8 +316,6 @@ export function AudioLibraryPanel() {
         probe.src = objectUrl;
       });
 
-      // MUST live under the user's id: the media bucket policy only allows
-      // writes where the first folder equals auth.uid().
       const ext = (file.name.split(".").pop() || "mp3").toLowerCase();
       path = `${user.id}/audio-${crypto.randomUUID()}.${ext}`;
       const { error: upErr } = await supabase.storage
@@ -322,7 +336,6 @@ export function AudioLibraryPanel() {
       setTab("mine");
       toast.success("Sound added to your library");
     } catch (e) {
-      // Don't leave an orphaned file behind if the database insert failed.
       if (path) await supabase.storage.from("media").remove([path]);
       toast.error((e as Error).message);
     } finally {
@@ -350,6 +363,13 @@ export function AudioLibraryPanel() {
     el.onended = () => setPlayingId((cur) => (cur === audio.id ? null : cur));
   }
 
+  // Cross-reference all IDs, external_ids, and titles saved in the user's personal library
+  const savedKeys = new Set(
+    (mineQ.data?.audios ?? [])
+      .flatMap((a) => [a.id, a.external_id, a.title.toLowerCase().trim()])
+      .filter(Boolean),
+  );
+
   function renderList(
     audios: TrendingAudioRow[],
     isLoading: boolean,
@@ -366,27 +386,42 @@ export function AudioLibraryPanel() {
     }
     return (
       <ul className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
-        {audios.map((a) => (
-          <AudioCard
-            key={a.id}
-            audio={a}
-            playingId={playingId}
-            onPlayToggle={handlePlayToggle}
-            onFavorite={(audio) =>
-              favMut.mutate({ audioId: audio.id, isFavorite: !audio.is_favorite })
-            }
-            favoritePending={favMut.isPending}
-            onDelete={(audio) => deleteMut.mutate(audio)}
-            deletePending={deleteMut.isPending}
-            canDelete={canDelete}
-          />
-        ))}
+        {audios.map((a) => {
+          const isSaved =
+            savedKeys.has(a.id) ||
+            (a.external_id ? savedKeys.has(a.external_id) : false) ||
+            savedKeys.has(a.title.toLowerCase().trim());
+
+          return (
+            <AudioCard
+              key={a.id}
+              audio={a}
+              playingId={playingId}
+              isSaved={isSaved}
+              onPlayToggle={handlePlayToggle}
+              onSave={(audio) =>
+                favMut.mutate(
+                  { audioId: audio.id, isFavorite: true },
+                  {
+                    onSuccess: () => {
+                      toast.success("Saved to your Library! Ready for Clip DNA & Studio.");
+                    },
+                  },
+                )
+              }
+              savePending={favMut.isPending}
+              onDelete={(audio) => deleteMut.mutate(audio)}
+              deletePending={deleteMut.isPending}
+              canDelete={canDelete}
+            />
+          );
+        })}
       </ul>
     );
   }
 
   const noTrendingHint =
-    "No trending sounds have been added yet. Upload your own and they'll show up under My Library.";
+    "No trending sounds have been added yet. Upload your own or click 'Sync trending' to pull the latest chart.";
 
   return (
     <section className="panel space-y-5 p-6">
@@ -450,7 +485,7 @@ export function AudioLibraryPanel() {
           {renderList(
             mineQ.data?.audios ?? [],
             mineQ.isLoading,
-            "Nothing here yet. Upload an audio file to get started.",
+            "Nothing here yet. Upload an audio file or click 'Save to Library' on any trending track.",
             true,
           )}
         </TabsContent>
