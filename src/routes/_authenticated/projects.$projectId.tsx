@@ -372,6 +372,8 @@ function ProjectWorkspace() {
 
   async function runDnaPreview() {
     if (!user) return;
+    if (dnaRunning) return;
+
     if (!dnaRoles.ok) {
       toast.error(dnaRoles.reason);
       return;
