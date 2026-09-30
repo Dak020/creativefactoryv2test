@@ -178,6 +178,7 @@ export async function renderSequence(opts: SequenceRenderOptions): Promise<Brows
   const soundtrack = opts.soundtrackUrl
     ? await prepareSoundtrack(opts.soundtrackUrl, signal)
     : null;
+  let audioCtx: AudioContext | null = null;
   if (withAudio || soundtrack) {
     const audioSources: { el: HTMLMediaElement; volume?: number }[] = [];
     if (withAudio) {
@@ -188,8 +189,9 @@ export async function renderSequence(opts: SequenceRenderOptions): Promise<Brows
     if (soundtrack) {
       audioSources.push({ el: soundtrack, volume: opts.soundtrackVolume ?? 1 });
     }
-    attachAudioSources(captureStream, audioSources);
+    audioCtx = attachAudioSources(captureStream, audioSources);
   }
+
 
   const recorder = new MediaRecorder(captureStream, { mimeType, videoBitsPerSecond: 6_000_000 });
   const chunks: BlobPart[] = [];
