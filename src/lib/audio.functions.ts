@@ -167,20 +167,47 @@ export const deleteCustomAudioFn = createServerFn({ method: "POST" })
     return { ok: true };
   });
 
-/** Highest-virality track in a region, for the VA's automatic pick. */
+/** Highest-virality tracks in a region, randomly sampled for the VA's automatic pick. */
 export const getAutoPickAudioFn = createServerFn({ method: "GET" })
-  .inputValidator((input: { region?: string } | undefined) => input ?? {})
+  .inputValidator((input: { region?: string; excludeId?: string } | undefined) => input ?? {})
   .middleware([requireSupabaseAuth])
   .handler(async ({ data, context }) => {
-    const { data: rows, error } = await context.supabase
+    let q = context.supabase
       .from("trending_audios")
       .select(AUDIO_COLUMNS)
       .eq("region", data.region ?? "global")
       .neq("source", "seed_placeholder")
       .order("virality_score", { ascending: false })
-      .limit(1);
+      .limit(15);
+
+    if (data.excludeId) {
+      q = q.neq("id", data.excludeId);
+    }
+
+    const { data: rows, error } = await q;
     if (error) throw new Error(error.message);
-    return { audio: (rows?.[0] ?? null) as TrendingAudioRow | null };
+
+    if (!rows || rows.length === 0) {
+      // If filtering by excludeId left no tracks, fall back to top tracks without exclusion
+      if (data.excludeId) {
+        const { data: fallbackRows } = await context.supabase
+          .from("trending_audios")
+          .select(AUDIO_COLUMNS)
+          .eq("region", data.region ?? "global")
+          .neq("source", "seed_placeholder")
+          .order("virality_score", { ascending: false })
+          .limit(15);
+        if (fallbackRows && fallbackRows.length > 0) {
+          const idx = Math.floor(Math.random() * fallbackRows.length);
+          return { audio: fallbackRows[idx] as TrendingAudioRow };
+        }
+      }
+      return { audio: null };
+    }
+
+    // Pick randomly from the top trending pool so each variant gets a fresh sound
+    const randomIndex = Math.floor(Math.random() * rows.length);
+    return { audio: rows[randomIndex] as TrendingAudioRow };
   });
 
 /** Save an audio file the browser already uploaded to the "media" bucket. */
