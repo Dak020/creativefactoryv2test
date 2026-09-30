@@ -250,6 +250,10 @@ function ProjectWorkspace() {
 
   async function generateBatch() {
     if (!user) return;
+    // Guard against a second click landing while the sound is still being
+    // prepared — two renders at once stall the video and ruin the export.
+    if (running) return;
+
     const hooks = data?.hooks ?? [];
     if (hooks.length === 0) {
       toast.error("Add at least one hook to this project first.");
