@@ -378,7 +378,10 @@ export async function renderSequence(opts: SequenceRenderOptions): Promise<Brows
           // hold is what showed up as a freeze frame mid-edit.
           const reachedCut = video.ended || video.currentTime >= end - 0.03;
           drawFrame();
-          const segElapsed = (performance.now() - segStartedAt) / 1000;
+          const wallElapsed = (performance.now() - segStartedAt) / 1000;
+          const audioElapsed =
+            audioCtx && segAudioStartedAt !== null ? audioCtx.currentTime - segAudioStartedAt : 0;
+          const segElapsed = Math.max(wallElapsed, audioElapsed);
           const pct =
             ((elapsedBefore + Math.min(segElapsed, outputDuration)) / totalDuration) * 100;
           opts.onProgress?.(Math.min(99, Math.round(pct)));
@@ -400,6 +403,17 @@ export async function renderSequence(opts: SequenceRenderOptions): Promise<Brows
           if (done) return;
           if (performance.now() - lastRafAt >= FALLBACK_GAP_MS) tick();
         }, 1000 / 30);
+        // Last-resort stop for a fully frozen tab, where neither the paint loop
+        // nor the interval runs: end the segment near its intended length
+        // instead of letting the soundtrack run on unbounded.
+        const hardStop = setTimeout(
+          () => {
+            if (!video.paused) video.pause();
+            finish();
+          },
+          Math.ceil(outputDuration * 1000) + 400,
+        );
+
         const raf = () => {
           if (done) return;
           lastRafAt = performance.now();
