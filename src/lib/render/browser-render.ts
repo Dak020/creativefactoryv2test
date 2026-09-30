@@ -488,16 +488,31 @@ export async function renderVariant(opts: BrowserRenderOptions): Promise<Browser
     await new Promise<void>((resolve, reject) => {
       let done = false;
       let lastRafAt = performance.now();
+      // Hard-stop every sound source. The soundtrack loops, so if it is not
+      // stopped at the exact trim boundary it keeps streaming into the recorder
+      // after the video has already frozen on its last frame — that is how a
+      // 7s edit came out as a long file with 4s of video and minutes of music.
+      const stopAudio = () => {
+        if (soundtrack && !soundtrack.paused) {
+          soundtrack.loop = false;
+          soundtrack.pause();
+        }
+        if (!video.paused) video.pause();
+      };
       const finish = () => {
         if (done) return;
         done = true;
         clearInterval(timer);
+        clearTimeout(hardStop);
+        stopAudio();
         resolve();
       };
       const cancel = () => {
         if (done) return;
         done = true;
         clearInterval(timer);
+        clearTimeout(hardStop);
+        stopAudio();
         reject(new RenderCancelledError());
       };
 
@@ -513,7 +528,12 @@ export async function renderVariant(opts: BrowserRenderOptions): Promise<Browser
           if (!video.paused) video.pause();
         }
         drawFrame();
-        const elapsed = (performance.now() - startedAt) / 1000;
+        const wallElapsed = (performance.now() - startedAt) / 1000;
+        // The audio clock is immune to background-tab throttling, so take
+        // whichever clock has advanced furthest as the true elapsed time.
+        const audioElapsed =
+          audioCtx && audioStartedAt !== null ? audioCtx.currentTime - audioStartedAt : 0;
+        const elapsed = Math.max(wallElapsed, audioElapsed);
         opts.onProgress?.(Math.min(99, Math.round((elapsed / durationSeconds) * 100)));
         if (elapsed >= durationSeconds) finish();
       };
@@ -528,6 +548,10 @@ export async function renderVariant(opts: BrowserRenderOptions): Promise<Browser
           tick();
         }
       }, 1000 / 30);
+      // Last-resort stop: if both the paint loop and the interval are frozen
+      // (fully backgrounded tab), this still ends the recording near the right
+      // length instead of letting the music run on for minutes.
+      const hardStop = setTimeout(() => finish(), Math.ceil(durationSeconds * 1000) + 250);
       const raf = () => {
         if (done) return;
         lastRafAt = performance.now();
@@ -537,6 +561,7 @@ export async function renderVariant(opts: BrowserRenderOptions): Promise<Browser
       requestAnimationFrame(raf);
       signal?.addEventListener("abort", cancel, { once: true });
     });
+
   } catch (e) {
     if (recorder.state !== "inactive") recorder.stop();
     captureStreamToUse.getTracks().forEach((t) => t.stop());
