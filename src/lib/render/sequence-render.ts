@@ -326,6 +326,10 @@ export async function renderSequence(opts: SequenceRenderOptions): Promise<Brows
         actualPlaybackRate: video.playbackRate,
       });
       const segStartedAt = performance.now();
+      // The audio clock keeps true wall-clock time even in a backgrounded tab
+      // where the paint loop and timers are throttled, so the soundtrack can
+      // never keep streaming into the recording past the edit's own length.
+      const segAudioStartedAt = audioCtx ? audioCtx.currentTime : null;
 
       await new Promise<void>((resolve, reject) => {
         let done = false;
@@ -334,12 +338,18 @@ export async function renderSequence(opts: SequenceRenderOptions): Promise<Brows
           if (done) return;
           done = true;
           clearInterval(timer);
+          clearTimeout(hardStop);
           resolve();
         };
         const cancel = () => {
           if (done) return;
           done = true;
           clearInterval(timer);
+          clearTimeout(hardStop);
+          if (soundtrack && !soundtrack.paused) {
+            soundtrack.loop = false;
+            soundtrack.pause();
+          }
           reject(new RenderCancelledError());
         };
         const tick = () => {
@@ -348,6 +358,7 @@ export async function renderSequence(opts: SequenceRenderOptions): Promise<Brows
             cancel();
             return;
           }
+
           // Defensive: if playbackRate has drifted from the intended value
           // at any point (not just at the initial play() call), correct it
           // immediately. Left uncorrected, the video advances at the wrong
