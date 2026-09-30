@@ -397,6 +397,19 @@ function StudioPage() {
   }
 
   async function createVariants() {
+    // Lock immediately: preparing the sound takes a moment, and without this
+    // an extra click could start a second heavy render in the same tab, which
+    // stalls the video and corrupts the export.
+    if (rendering) return;
+    setRendering(true);
+    try {
+      await runCreateVariants();
+    } finally {
+      setRendering(false);
+    }
+  }
+
+  async function runCreateVariants() {
     if (!user) {
       toast.error("Sign in again to continue.");
       return;
@@ -405,6 +418,7 @@ function StudioPage() {
       toast.error("Select at least one hook.");
       return;
     }
+
     const chosen = selected
       .map((id) => (hooks ?? []).find((h) => h.id === id))
       .filter((h): h is NonNullable<typeof h> => Boolean(h))

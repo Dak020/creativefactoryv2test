@@ -178,6 +178,7 @@ export async function renderSequence(opts: SequenceRenderOptions): Promise<Brows
   const soundtrack = opts.soundtrackUrl
     ? await prepareSoundtrack(opts.soundtrackUrl, signal)
     : null;
+  let audioCtx: AudioContext | null = null;
   if (withAudio || soundtrack) {
     const audioSources: { el: HTMLMediaElement; volume?: number }[] = [];
     if (withAudio) {
@@ -188,8 +189,9 @@ export async function renderSequence(opts: SequenceRenderOptions): Promise<Brows
     if (soundtrack) {
       audioSources.push({ el: soundtrack, volume: opts.soundtrackVolume ?? 1 });
     }
-    attachAudioSources(captureStream, audioSources);
+    audioCtx = attachAudioSources(captureStream, audioSources);
   }
+
 
   const recorder = new MediaRecorder(captureStream, { mimeType, videoBitsPerSecond: 6_000_000 });
   const chunks: BlobPart[] = [];
@@ -324,6 +326,10 @@ export async function renderSequence(opts: SequenceRenderOptions): Promise<Brows
         actualPlaybackRate: video.playbackRate,
       });
       const segStartedAt = performance.now();
+      // The audio clock keeps true wall-clock time even in a backgrounded tab
+      // where the paint loop and timers are throttled, so the soundtrack can
+      // never keep streaming into the recording past the edit's own length.
+      const segAudioStartedAt = audioCtx ? audioCtx.currentTime : null;
 
       await new Promise<void>((resolve, reject) => {
         let done = false;
@@ -332,12 +338,18 @@ export async function renderSequence(opts: SequenceRenderOptions): Promise<Brows
           if (done) return;
           done = true;
           clearInterval(timer);
+          clearTimeout(hardStop);
           resolve();
         };
         const cancel = () => {
           if (done) return;
           done = true;
           clearInterval(timer);
+          clearTimeout(hardStop);
+          if (soundtrack && !soundtrack.paused) {
+            soundtrack.loop = false;
+            soundtrack.pause();
+          }
           reject(new RenderCancelledError());
         };
         const tick = () => {
@@ -346,6 +358,7 @@ export async function renderSequence(opts: SequenceRenderOptions): Promise<Brows
             cancel();
             return;
           }
+
           // Defensive: if playbackRate has drifted from the intended value
           // at any point (not just at the initial play() call), correct it
           // immediately. Left uncorrected, the video advances at the wrong
@@ -365,7 +378,10 @@ export async function renderSequence(opts: SequenceRenderOptions): Promise<Brows
           // hold is what showed up as a freeze frame mid-edit.
           const reachedCut = video.ended || video.currentTime >= end - 0.03;
           drawFrame();
-          const segElapsed = (performance.now() - segStartedAt) / 1000;
+          const wallElapsed = (performance.now() - segStartedAt) / 1000;
+          const audioElapsed =
+            audioCtx && segAudioStartedAt !== null ? audioCtx.currentTime - segAudioStartedAt : 0;
+          const segElapsed = Math.max(wallElapsed, audioElapsed);
           const pct =
             ((elapsedBefore + Math.min(segElapsed, outputDuration)) / totalDuration) * 100;
           opts.onProgress?.(Math.min(99, Math.round(pct)));
@@ -387,6 +403,17 @@ export async function renderSequence(opts: SequenceRenderOptions): Promise<Brows
           if (done) return;
           if (performance.now() - lastRafAt >= FALLBACK_GAP_MS) tick();
         }, 1000 / 30);
+        // Last-resort stop for a fully frozen tab, where neither the paint loop
+        // nor the interval runs: end the segment near its intended length
+        // instead of letting the soundtrack run on unbounded.
+        const hardStop = setTimeout(
+          () => {
+            if (!video.paused) video.pause();
+            finish();
+          },
+          Math.ceil(outputDuration * 1000) + 400,
+        );
+
         const raf = () => {
           if (done) return;
           lastRafAt = performance.now();
@@ -420,7 +447,16 @@ export async function renderSequence(opts: SequenceRenderOptions): Promise<Brows
     throw e;
   }
 
+  // Stop the music the instant the last segment ends — before the poster frame
+  // is captured — so no extra music is recorded after the video is over.
+  if (soundtrack) {
+    soundtrack.loop = false;
+    soundtrack.pause();
+  }
+  prepared.forEach((p) => p.video.pause());
+
   const thumbnail = await new Promise<Blob | null>((resolve) => {
+
     try {
       canvas.toBlob((b) => resolve(b), "image/jpeg", 0.8);
     } catch {

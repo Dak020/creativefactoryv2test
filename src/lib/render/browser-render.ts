@@ -398,7 +398,7 @@ export async function renderVariant(opts: BrowserRenderOptions): Promise<Browser
   const audioSources: { el: HTMLMediaElement; volume?: number }[] = [];
   if (withAudio) audioSources.push({ el: video, volume: soundtrack ? 0.35 : 1 });
   if (soundtrack) audioSources.push({ el: soundtrack, volume: opts.soundtrackVolume ?? 1 });
-  attachAudioSources(captureStreamToUse, audioSources);
+  const audioCtx = attachAudioSources(captureStreamToUse, audioSources);
 
   const recorder = new MediaRecorder(captureStreamToUse, { mimeType, videoBitsPerSecond: 6_000_000 });
   const chunks: BlobPart[] = [];
@@ -471,6 +471,11 @@ export async function renderVariant(opts: BrowserRenderOptions): Promise<Browser
   drawFrame();
   recorder.start(200);
   const startedAt = performance.now();
+  // Audio clock: an AudioContext keeps advancing at true wall-clock speed even
+  // when the tab is backgrounded and rAF/setInterval are throttled. It is the
+  // authority on how much material has actually been recorded, so the export
+  // can never outrun the requested length.
+  const audioStartedAt = audioCtx ? audioCtx.currentTime : null;
   if (soundtrack) {
     soundtrack.currentTime = 0;
     await soundtrack.play().catch(() => undefined);
@@ -478,20 +483,36 @@ export async function renderVariant(opts: BrowserRenderOptions): Promise<Browser
   await video.play();
 
 
+
   try {
     await new Promise<void>((resolve, reject) => {
       let done = false;
       let lastRafAt = performance.now();
+      // Hard-stop every sound source. The soundtrack loops, so if it is not
+      // stopped at the exact trim boundary it keeps streaming into the recorder
+      // after the video has already frozen on its last frame — that is how a
+      // 7s edit came out as a long file with 4s of video and minutes of music.
+      const stopAudio = () => {
+        if (soundtrack && !soundtrack.paused) {
+          soundtrack.loop = false;
+          soundtrack.pause();
+        }
+        if (!video.paused) video.pause();
+      };
       const finish = () => {
         if (done) return;
         done = true;
         clearInterval(timer);
+        clearTimeout(hardStop);
+        stopAudio();
         resolve();
       };
       const cancel = () => {
         if (done) return;
         done = true;
         clearInterval(timer);
+        clearTimeout(hardStop);
+        stopAudio();
         reject(new RenderCancelledError());
       };
 
@@ -507,7 +528,12 @@ export async function renderVariant(opts: BrowserRenderOptions): Promise<Browser
           if (!video.paused) video.pause();
         }
         drawFrame();
-        const elapsed = (performance.now() - startedAt) / 1000;
+        const wallElapsed = (performance.now() - startedAt) / 1000;
+        // The audio clock is immune to background-tab throttling, so take
+        // whichever clock has advanced furthest as the true elapsed time.
+        const audioElapsed =
+          audioCtx && audioStartedAt !== null ? audioCtx.currentTime - audioStartedAt : 0;
+        const elapsed = Math.max(wallElapsed, audioElapsed);
         opts.onProgress?.(Math.min(99, Math.round((elapsed / durationSeconds) * 100)));
         if (elapsed >= durationSeconds) finish();
       };
@@ -522,6 +548,10 @@ export async function renderVariant(opts: BrowserRenderOptions): Promise<Browser
           tick();
         }
       }, 1000 / 30);
+      // Last-resort stop: if both the paint loop and the interval are frozen
+      // (fully backgrounded tab), this still ends the recording near the right
+      // length instead of letting the music run on for minutes.
+      const hardStop = setTimeout(() => finish(), Math.ceil(durationSeconds * 1000) + 250);
       const raf = () => {
         if (done) return;
         lastRafAt = performance.now();
@@ -531,6 +561,7 @@ export async function renderVariant(opts: BrowserRenderOptions): Promise<Browser
       requestAnimationFrame(raf);
       signal?.addEventListener("abort", cancel, { once: true });
     });
+
   } catch (e) {
     if (recorder.state !== "inactive") recorder.stop();
     captureStreamToUse.getTracks().forEach((t) => t.stop());
