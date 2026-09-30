@@ -64,24 +64,54 @@ async function runActor(input: unknown): Promise<ApifySound[]> {
   return Array.isArray(items) ? (items as ApifySound[]) : [];
 }
 
-/** Keywords used to surface what's currently breaking out, per region. */
+/**
+ * Keywords per region. These target what people actually scroll past on the
+ * For You page — songs AND iconic non-music sounds (drops, sax builds, remix
+ * beats) — instead of the generic "trending sound" tag that meme/skit
+ * accounts spam in their captions.
+ */
 const REGION_KEYWORDS: Record<string, { keywords: string[]; country?: string }> = {
-  global: { keywords: ["trending sound", "viral song", "trending audio"] },
-  usa: { keywords: ["trending sound usa", "viral song", "trending audio"], country: "US" },
+  global: {
+    keywords: ["viral fyp songs", "trending fyp music", "tiktok viral hits", "viral tiktok audio"],
+  },
+  usa: {
+    keywords: ["trending fyp music usa", "viral songs tiktok us", "tiktok viral hits"],
+    country: "US",
+  },
 };
 
-/** Fetch and rank the current trending sounds for a region. */
+/**
+ * Titles that mark caption-spam rather than a real trending sound: meme skits,
+ * AI slop, storytime dialogue and unnamed UGC voice clips.
+ */
+const SPAM_TITLE =
+  /(fruit|brainrot|skit|storytime|story time|\bpov\b|part\s?\d|episode|\bdrama\b|ai voice|\bmeme\b|\basmr\b|original sound\s*-\s*(user)?\d{4,})/i;
+
+/** Shortest sound we keep — below this it's almost always a reaction soundbite. */
+const MIN_DURATION_SEC = 8;
+
+/**
+ * Fetch and rank the current trending sounds for a region. TikTok's public
+ * search can come back thin for a narrow window, so widen the date range
+ * instead of reporting "no sounds found".
+ */
 export async function fetchTrendingSounds(region: string, limit = 40): Promise<TrendingAudioSeed[]> {
   const cfg = REGION_KEYWORDS[region] ?? REGION_KEYWORDS["global"]!;
-  const items = await runActor({
-    mode: "sounds",
-    keywords: cfg.keywords,
-    sortBy: "most-liked",
-    datePosted: "this-week",
-    ...(cfg.country ? { region: cfg.country } : {}),
-    maxItems: limit,
-  });
-  return rankSounds(items);
+  const windows = ["this-week", "this-month", "all-time"] as const;
+
+  for (const datePosted of windows) {
+    const items = await runActor({
+      mode: "sounds",
+      keywords: cfg.keywords,
+      sortBy: "most-liked",
+      datePosted,
+      ...(cfg.country ? { region: cfg.country } : {}),
+      maxItems: limit,
+    });
+    const ranked = rankSounds(items);
+    if (ranked.length > 0) return ranked;
+  }
+  return [];
 }
 
 /** Full metadata for one sound, looked up by its TikTok sound page URL or id. */
