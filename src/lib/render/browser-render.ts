@@ -471,11 +471,17 @@ export async function renderVariant(opts: BrowserRenderOptions): Promise<Browser
   drawFrame();
   recorder.start(200);
   const startedAt = performance.now();
+  // Audio clock: an AudioContext keeps advancing at true wall-clock speed even
+  // when the tab is backgrounded and rAF/setInterval are throttled. It is the
+  // authority on how much material has actually been recorded, so the export
+  // can never outrun the requested length.
+  const audioStartedAt = audioCtx ? audioCtx.currentTime : null;
   if (soundtrack) {
     soundtrack.currentTime = 0;
     await soundtrack.play().catch(() => undefined);
   }
   await video.play();
+
 
 
   try {
