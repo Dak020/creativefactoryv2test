@@ -398,7 +398,7 @@ export async function renderVariant(opts: BrowserRenderOptions): Promise<Browser
   const audioSources: { el: HTMLMediaElement; volume?: number }[] = [];
   if (withAudio) audioSources.push({ el: video, volume: soundtrack ? 0.35 : 1 });
   if (soundtrack) audioSources.push({ el: soundtrack, volume: opts.soundtrackVolume ?? 1 });
-  attachAudioSources(captureStreamToUse, audioSources);
+  const audioCtx = attachAudioSources(captureStreamToUse, audioSources);
 
   const recorder = new MediaRecorder(captureStreamToUse, { mimeType, videoBitsPerSecond: 6_000_000 });
   const chunks: BlobPart[] = [];
