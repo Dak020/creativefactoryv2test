@@ -64,54 +64,44 @@ async function runActor(input: unknown): Promise<ApifySound[]> {
   return Array.isArray(items) ? (items as ApifySound[]) : [];
 }
 
-/**
- * Keywords per region. These target what people actually scroll past on the
- * For You page — songs AND iconic non-music sounds (drops, sax builds, remix
- * beats) — instead of the generic "trending sound" tag that meme/skit
- * accounts spam in their captions.
- */
 const REGION_KEYWORDS: Record<string, { keywords: string[]; country?: string }> = {
   global: {
-    keywords: ["viral fyp songs", "trending fyp music", "tiktok viral hits", "viral tiktok audio"],
+    keywords: ["trending sound", "viral song", "tiktok hits"],
   },
   usa: {
-    keywords: ["trending fyp music usa", "viral songs tiktok us", "tiktok viral hits"],
+    keywords: ["trending sound", "viral song", "tiktok hits"],
     country: "US",
   },
 };
 
 /**
- * Titles that mark caption-spam rather than a real trending sound: meme skits,
- * AI slop, storytime dialogue and unnamed UGC voice clips.
+ * Titles and authors that mark meme spam rather than actual trending music/audio.
  */
 const SPAM_TITLE =
   /(fruit|brainrot|skit|storytime|story time|\bpov\b|part\s?\d|episode|\bdrama\b|ai voice|\bmeme\b|\basmr\b|original sound\s*-\s*(user)?\d{4,})/i;
 
-/** Shortest sound we keep — below this it's almost always a reaction soundbite. */
-const MIN_DURATION_SEC = 8;
+const SPAM_AUTHOR = /(fruit|brainrot|ai story|story\s*time|all\.clips)/i;
+
+/** Shortest sound we keep — below 10s it's almost always a reaction soundbite. */
+const MIN_DURATION_SEC = 10;
 
 /**
- * Fetch and rank the current trending sounds for a region. TikTok's public
- * search can come back thin for a narrow window, so widen the date range
- * instead of reporting "no sounds found".
+ * Fetch and rank current trending sounds. We perform a single targeted run
+ * to preserve Apify free-tier limits (30-min interval between runs).
  */
 export async function fetchTrendingSounds(region: string, limit = 40): Promise<TrendingAudioSeed[]> {
   const cfg = REGION_KEYWORDS[region] ?? REGION_KEYWORDS["global"]!;
-  const windows = ["this-week", "this-month", "all-time"] as const;
 
-  for (const datePosted of windows) {
-    const items = await runActor({
-      mode: "sounds",
-      keywords: cfg.keywords,
-      sortBy: "most-liked",
-      datePosted,
-      ...(cfg.country ? { region: cfg.country } : {}),
-      maxItems: limit,
-    });
-    const ranked = rankSounds(items);
-    if (ranked.length > 0) return ranked;
-  }
-  return [];
+  const items = await runActor({
+    mode: "sounds",
+    keywords: cfg.keywords,
+    sortBy: "most-liked",
+    datePosted: "this-week",
+    ...(cfg.country ? { region: cfg.country } : {}),
+    maxItems: limit,
+  });
+
+  return rankSounds(items);
 }
 
 /** Full metadata for one sound, looked up by its TikTok sound page URL or id. */
@@ -120,9 +110,18 @@ export async function fetchSoundDetails(soundUrlOrId: string): Promise<ApifySoun
   return items[0] ?? null;
 }
 
-/** Turn raw usage numbers into the virality score and breakout badge the UI shows. */
+/** Turn raw usage numbers into virality scores while filtering spam skits. */
 export function rankSounds(items: ApifySound[]): TrendingAudioSeed[] {
-  const usable = items.filter((s) => s.playUrl && s.title);
+  const usable = items.filter((s) => {
+    if (!s.playUrl || !s.title) return false;
+    // Discard reaction soundbites shorter than 10 seconds
+    if (s.durationSec && s.durationSec < MIN_DURATION_SEC) return false;
+    // Discard fruit drama, brainrot, and skit dialogue
+    if (SPAM_TITLE.test(s.title)) return false;
+    if (s.author && SPAM_AUTHOR.test(s.author)) return false;
+    return true;
+  });
+
   if (usable.length === 0) return [];
   const maxUsage = Math.max(...usable.map((s) => s.usageCount ?? 0), 1);
   const maxPlays = Math.max(...usable.map((s) => s.sampleTopVideoPlays ?? 0), 1);
@@ -131,9 +130,6 @@ export function rankSounds(items: ApifySound[]): TrendingAudioSeed[] {
     .map((s) => {
       const usage = s.usageCount ?? 0;
       const plays = s.sampleTopVideoPlays ?? 0;
-      // Usage count is how widely a sound is already adopted; top-video plays
-      // show how hard it's hitting right now. Blend both so an early sound
-      // with huge reach still ranks.
       const reach = Math.round((usage / maxUsage) * 60 + (plays / maxPlays) * 40);
       const trendRate = Math.round((plays / Math.max(usage, 1)) * 10) / 10;
       const label =
