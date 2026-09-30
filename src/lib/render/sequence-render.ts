@@ -447,7 +447,16 @@ export async function renderSequence(opts: SequenceRenderOptions): Promise<Brows
     throw e;
   }
 
+  // Stop the music the instant the last segment ends — before the poster frame
+  // is captured — so no extra music is recorded after the video is over.
+  if (soundtrack) {
+    soundtrack.loop = false;
+    soundtrack.pause();
+  }
+  prepared.forEach((p) => p.video.pause());
+
   const thumbnail = await new Promise<Blob | null>((resolve) => {
+
     try {
       canvas.toBlob((b) => resolve(b), "image/jpeg", 0.8);
     } catch {
