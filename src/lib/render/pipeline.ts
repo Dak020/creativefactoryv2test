@@ -9,7 +9,7 @@
  */
 
 import { supabase } from "@/integrations/supabase/client";
-import { planStartOffsets, renderVariant, RenderCancelledError, type HookPlacement } from "./browser-render";
+import { planStartOffsets, renderVariant, RenderCancelledError, type HookPlacement, type SeekOptions } from "./browser-render";
 import { resolveRenderUrl } from "./output";
 
 export const RENDER_BUCKET = "renders";
@@ -72,6 +72,7 @@ export type BatchInput = {
   /** Soundtrack level, 0..1 (defaults to 1). */
   soundtrackVolume?: number | undefined;
   signal?: AbortSignal | undefined;
+  seek?: SeekOptions;
   onUpdate: (items: BatchItem[]) => void;
 };
 
@@ -141,7 +142,7 @@ export async function runBatch(input: BatchInput): Promise<BatchItem[]> {
   const sourceDuration = Number(asset.duration ?? CLIP_SECONDS);
   const outputDuration = sourceDuration > 0 ? Math.min(sourceDuration, CLIP_SECONDS) : CLIP_SECONDS;
 
-  const offsets = planStartOffsets(sourceDuration, plan.length, outputDuration);
+  const offsets = planStartOffsets(sourceDuration, plan.length, outputDuration, input.seek);
 
   let items: BatchItem[] = [];
   const push = () => onUpdate([...items]);
@@ -345,6 +346,7 @@ export type MultiClipBatchInput = {
   /** Soundtrack level, 0..1 (defaults to 1). */
   soundtrackVolume?: number | undefined;
   signal?: AbortSignal | undefined;
+  seek?: SeekOptions;
   onUpdate: (items: BatchItem[]) => void;
 };
 
@@ -379,7 +381,7 @@ export async function runMultiClipBatch(input: MultiClipBatchInput): Promise<Bat
       asset.hook_placement === "middle" || asset.hook_placement === "bottom" ? asset.hook_placement : "top";
     perClip.set(asset.id, {
       outputDuration,
-      offsets: planStartOffsets(sourceDuration, Math.max(1, slotsForThisClip), outputDuration),
+      offsets: planStartOffsets(sourceDuration, Math.max(1, slotsForThisClip), outputDuration, input.seek),
       placement,
     });
   }
