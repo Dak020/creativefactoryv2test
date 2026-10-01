@@ -14,6 +14,8 @@
  *    the same clip pool produce genuinely different edits.
  */
 
+import type { SeekOptions } from "@/lib/render/browser-render";
+
 export type DnaRole = "start" | "middle" | "end";
 
 export const DNA_SPEEDS = [1.0, 1.5, 1.7, 2.0] as const;
@@ -155,7 +157,7 @@ export type SolveResult =
  * Solve one DNA edit. Attempts random speed combinations until one admits a
  * valid duration split; returns a different valid solution most times it runs.
  */
-export function solveDna(orderedClips: SolverClip[], targetDuration: number, attempts = 400): SolveResult {
+export function solveDna(orderedClips: SolverClip[], targetDuration: number, attempts = 400, seek: SeekOptions = { mode: "random" }): SolveResult {
   if (orderedClips.length === 0) return { ok: false, reason: "No clips to combine." };
   const target = Number(targetDuration);
   if (!Number.isFinite(target) || target <= 0) return { ok: false, reason: "Invalid target duration." };
@@ -194,7 +196,12 @@ export function solveDna(orderedClips: SolverClip[], targetDuration: number, att
       const maxStart = Math.max(0, c.duration - sourceSpan);
       // The opener always starts at 0 so the hook lands on the clip's real
       // first frame instead of a random mid-clip jump cut.
-      const sourceIn = c.role === "start" ? 0 : round2(Math.random() * maxStart);
+      const sourceIn =
+        seek.mode === "beginning"
+          ? 0
+          : seek.mode === "manual"
+            ? round2(Math.min(maxStart, Math.max(0, Number(seek.manualSeconds) || 0)))
+            : round2(Math.random() * maxStart);
       const sourceOut = round2(Math.min(c.duration, sourceIn + sourceSpan));
       return {
         media_asset_id: c.id,
@@ -246,10 +253,10 @@ export function solveDna(orderedClips: SolverClip[], targetDuration: number, att
 }
 
 /** Solve straight from a project's tagged clips: roles check + clip pick + solve. */
-export function solveForProject(clips: SolverClip[], targetDuration: number): SolveResult & { picked?: SolverClip[] } {
+export function solveForProject(clips: SolverClip[], targetDuration: number, seek?: SeekOptions): SolveResult & { picked?: SolverClip[] } {
   const roles = checkRoles(clips);
   if (!roles.ok) return { ok: false, reason: roles.reason };
   const picked = pickSequenceClips(clips, roles.sequence);
-  const result = solveDna(picked, targetDuration);
+  const result = solveDna(picked, targetDuration, 400, seek);
   return result.ok ? { ...result, picked } : result;
 }

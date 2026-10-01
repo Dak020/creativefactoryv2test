@@ -10,7 +10,7 @@
  */
 
 import { supabase } from "@/integrations/supabase/client";
-import type { HookPlacement } from "./browser-render";
+import type { HookPlacement, SeekOptions } from "./browser-render";
 import { renderSequence, type SequenceSegment } from "./sequence-render";
 import { RenderCancelledError } from "./browser-render";
 import { resolveRenderUrl } from "./output";
@@ -38,8 +38,8 @@ function normalizePlacement(value: string | null | undefined): HookPlacement {
 }
 
 /** Solve one DNA edit from the project's tagged clips. */
-export function planDna(clips: DnaClip[], targetDuration: number): { ok: true; plan: DnaPlan } | { ok: false; reason: string } {
-  const result = solveForProject(clips, targetDuration);
+export function planDna(clips: DnaClip[], targetDuration: number, seek?: SeekOptions): { ok: true; plan: DnaPlan } | { ok: false; reason: string } {
+  const result = solveForProject(clips, targetDuration, seek);
   if (!result.ok) return { ok: false, reason: result.reason };
 
   const clipById = Object.fromEntries(clips.map((c) => [c.id, c]));
@@ -378,6 +378,7 @@ export type DnaBatchInput = {
   /** Soundtrack level, 0..1 (defaults to 1). */
   soundtrackVolume?: number | undefined;
   signal?: AbortSignal;
+  seek?: SeekOptions;
   onUpdate: (items: BatchItem[]) => void;
 };
 
@@ -396,7 +397,7 @@ export async function runDnaBatch(input: DnaBatchInput): Promise<BatchItem[]> {
     // remaining queued variants from ever starting, not just interrupt
     // whichever one happens to be rendering right now.
     if (signal?.aborted) break;
-    const planned = planDna(clips, targetDuration);
+    const planned = planDna(clips, targetDuration, input.seek);
     if (!planned.ok) throw new Error(planned.reason);
     const hook = hooks[i % hooks.length]!;
     const item = await runDnaVariant({

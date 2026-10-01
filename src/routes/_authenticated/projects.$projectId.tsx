@@ -47,6 +47,7 @@ import {
 } from "@/lib/render/pipeline";
 import { Checkbox } from "@/components/ui/checkbox";
 import { checkRoles } from "@/lib/dna/solver";
+import type { SeekMode } from "@/lib/render/browser-render";
 import {
   planDna,
   runDnaVariant,
@@ -110,6 +111,9 @@ function ProjectWorkspace() {
   // single-clip flow above, since a DNA render and a regular render are
   // different pipelines that can't run at the same time from this page.
   const [targetDuration, setTargetDuration] = useState("8");
+  const [dnaSeekMode, setDnaSeekMode] = useState<SeekMode>("random");
+  const [dnaManualSeek, setDnaManualSeek] = useState("0");
+  const dnaSeek = { mode: dnaSeekMode, manualSeconds: Number(dnaManualSeek) || 0 };
   // How many DNA variants a single approval produces (the approved preview
   // counts as the first one). Selectable instead of following the single-clip
   // batch quantity.
@@ -405,7 +409,7 @@ function ProjectWorkspace() {
       const clips = await resolveDnaClips();
       if (!clips) return;
 
-      const planned = planDna(clips, target);
+      const planned = planDna(clips, target, dnaSeek);
       if (!planned.ok) {
         toast.error(planned.reason);
         return;
@@ -487,6 +491,7 @@ function ProjectWorkspace() {
         clips: dnaPreview.clips,
         hooks: hookList,
         targetDuration: target,
+        seek: dnaSeek,
         quantity: remaining,
         withAudio: audioSelection.withAudio,
         soundtrackUrl,
@@ -763,6 +768,31 @@ function ProjectWorkspace() {
               onChange={(e) => setTargetDuration(e.target.value)}
               className="w-24"
             />
+          </div>
+          <div className="space-y-1.5">
+            <Label className="text-xs">Start point in clips</Label>
+            <div className="flex items-center gap-2">
+              <Select value={dnaSeekMode} onValueChange={(v) => setDnaSeekMode(v as SeekMode)}>
+                <SelectTrigger className="w-56">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="random">Random (different each render)</SelectItem>
+                  <SelectItem value="manual">Choose a time</SelectItem>
+                  <SelectItem value="beginning">From the beginning (0:00)</SelectItem>
+                </SelectContent>
+              </Select>
+              {dnaSeekMode === "manual" && (
+                <Input
+                  type="number"
+                  min={0}
+                  step={0.5}
+                  value={dnaManualSeek}
+                  onChange={(e) => setDnaManualSeek(e.target.value)}
+                  className="w-20"
+                />
+              )}
+            </div>
           </div>
           <div className="space-y-1.5">
             <Label htmlFor="dna-quantity" className="text-xs">
