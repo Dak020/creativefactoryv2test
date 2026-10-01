@@ -27,7 +27,7 @@ export const DURATION_TOLERANCE = 0.05;
  * sprawling half of the edit. It stays inside a tight, readable window.
  */
 export const START_MIN_SECONDS = 1.2;
-export const START_MAX_SECONDS = 3;
+export const START_MAX_SECONDS = 5;
 
 export type SolverClip = {
   id: string;
