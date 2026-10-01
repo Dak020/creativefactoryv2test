@@ -169,7 +169,7 @@ export const deleteCustomAudioFn = createServerFn({ method: "POST" })
 
 /** Highest-virality tracks in a region, randomly sampled for the VA's automatic pick. */
 export const getAutoPickAudioFn = createServerFn({ method: "GET" })
-  .inputValidator((input: { region?: string; excludeId?: string } | undefined) => input ?? {})
+  .inputValidator((input: { region?: string | undefined; excludeId?: string | undefined } | undefined) => input ?? {})
   .middleware([requireSupabaseAuth])
   .handler(async ({ data, context }) => {
     let q = context.supabase
