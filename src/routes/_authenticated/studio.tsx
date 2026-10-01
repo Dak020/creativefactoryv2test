@@ -39,6 +39,7 @@ import {
   type BatchItem,
 } from "@/lib/render/pipeline";
 import { deleteRender } from "@/lib/render/delete";
+import type { SeekMode } from "@/lib/render/browser-render";
 import { DeleteRenderButton } from "@/components/DeleteRenderButton";
 import { RenderPlayer } from "@/components/RenderPlayer";
 import { downloadRender, renderFilename, resolveRenderUrl } from "@/lib/render/output";
@@ -280,6 +281,9 @@ function StudioPage() {
   // selected clips (remainder randomly assigned) instead of using only the
   // single clip picked above.
   const [multiClipMode, setMultiClipMode] = useState(false);
+  const [seekMode, setSeekMode] = useState<SeekMode>("random");
+  const [manualSeek, setManualSeek] = useState("0");
+  const seek = { mode: seekMode, manualSeconds: Number(manualSeek) || 0 };
   const search = Route.useSearch();
   const prepareAudioForRender = useServerFn(prepareAudioForRenderFn);
   const [audioSelection, setAudioSelection] = useState<AudioSelection>({
@@ -488,6 +492,7 @@ function StudioPage() {
           quantity,
           withAudio: audioSelection.withAudio,
           soundtrackUrl,
+          seek,
           signal: controller.signal,
           onUpdate: setLive,
         });
@@ -535,6 +540,7 @@ function StudioPage() {
         quantity,
         withAudio: audioSelection.withAudio,
         soundtrackUrl,
+        seek,
         signal: controller.signal,
         onUpdate: setLive,
       });
@@ -669,6 +675,38 @@ function StudioPage() {
             ) : (
               <p className="text-xs text-muted-foreground">Upload a clip to get started.</p>
             )}
+            <div className="space-y-1.5 rounded-lg border border-border/60 p-3">
+              <Label className="text-xs">Start point in clip</Label>
+              <div className="flex flex-wrap items-center gap-2">
+                <Select value={seekMode} onValueChange={(v) => setSeekMode(v as SeekMode)}>
+                  <SelectTrigger className="w-full sm:w-56">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="random">Random (different each render)</SelectItem>
+                    <SelectItem value="manual">Choose a time</SelectItem>
+                    <SelectItem value="beginning">From the beginning (0:00)</SelectItem>
+                  </SelectContent>
+                </Select>
+                {seekMode === "manual" && (
+                  <div className="flex items-center gap-1.5">
+                    <Input
+                      type="number"
+                      min={0}
+                      step={0.5}
+                      value={manualSeek}
+                      onChange={(e) => setManualSeek(e.target.value)}
+                      className="w-24"
+                    />
+                    <span className="text-xs text-muted-foreground">seconds</span>
+                  </div>
+                )}
+              </div>
+              <p className="text-xs text-muted-foreground">
+                Clips 8s or shorter always play in full. Times past the end are pulled back so the
+                video never runs out.
+              </p>
+            </div>
             {(assets ?? []).length > 1 && (
               <div className="space-y-1.5">
                 <Label className="text-xs">Use another upload</Label>

@@ -606,9 +606,27 @@ export async function renderVariant(opts: BrowserRenderOptions): Promise<Browser
   return { blob, extension, mimeType, thumbnail };
 }
 
-/** Evenly spread N start offsets across a source clip, skipping the first beat. */
-export function planStartOffsets(sourceDuration: number, count: number, clipLength: number) {
+export type SeekMode = "random" | "manual" | "beginning";
+export type SeekOptions = { mode: SeekMode; manualSeconds?: number };
+
+/**
+ * Pick N start offsets inside a source clip. Offsets never exceed
+ * `duration - clipLength`, so a trimmed variant never runs past the clip end.
+ *  - beginning: always 0
+ *  - manual: the chosen second, clamped to the valid range
+ *  - random: a different random point per variant
+ */
+export function planStartOffsets(
+  sourceDuration: number,
+  count: number,
+  clipLength: number,
+  seek: SeekOptions = { mode: "random" },
+) {
   const usable = Math.max(0, (sourceDuration || clipLength) - clipLength);
-  if (usable <= 0.1) return Array.from({ length: count }, () => 0);
-  return Array.from({ length: count }, (_, i) => Number(((usable * i) / Math.max(1, count - 1)).toFixed(2)));
+  if (usable <= 0.1 || seek.mode === "beginning") return Array.from({ length: count }, () => 0);
+  if (seek.mode === "manual") {
+    const s = Math.min(Math.max(0, Number(seek.manualSeconds) || 0), usable);
+    return Array.from({ length: count }, () => Number(s.toFixed(2)));
+  }
+  return Array.from({ length: count }, () => Number((Math.random() * usable).toFixed(2)));
 }
