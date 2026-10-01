@@ -24,8 +24,7 @@ export const DURATION_TOLERANCE = 0.05;
 
 /**
  * The opening segment carries the hook, so it is never a random sliver or a
- * sprawling half of the edit. It stays inside a tight, readable window and
- * always starts at the very beginning of the source clip.
+ * sprawling half of the edit. It stays inside a tight, readable window.
  */
 export const START_MIN_SECONDS = 1.2;
 export const START_MAX_SECONDS = 3;
@@ -38,6 +37,8 @@ export type SolverClip = {
   allowedSpeeds: number[];
   hookPlacement?: string | null;
   filename?: string;
+  seekMode?: "random" | "beginning" | "manual";
+  seekSeconds?: number;
 };
 
 export type DnaSegment = {
@@ -156,8 +157,14 @@ export type SolveResult =
 /**
  * Solve one DNA edit. Attempts random speed combinations until one admits a
  * valid duration split; returns a different valid solution most times it runs.
+ * Each clip respects its own seekMode and seekSeconds.
  */
-export function solveDna(orderedClips: SolverClip[], targetDuration: number, attempts = 400, seek: SeekOptions = { mode: "random" }): SolveResult {
+export function solveDna(
+  orderedClips: SolverClip[],
+  targetDuration: number,
+  attempts = 400,
+  defaultSeek: SeekOptions = { mode: "random" }
+): SolveResult {
   if (orderedClips.length === 0) return { ok: false, reason: "No clips to combine." };
   const target = Number(targetDuration);
   if (!Number.isFinite(target) || target <= 0) return { ok: false, reason: "Invalid target duration." };
@@ -194,14 +201,18 @@ export function solveDna(orderedClips: SolverClip[], targetDuration: number, att
       const outputDuration = split[i]!;
       const sourceSpan = Math.min(c.duration, outputDuration * speed);
       const maxStart = Math.max(0, c.duration - sourceSpan);
-      // The opener always starts at 0 so the hook lands on the clip's real
-      // first frame instead of a random mid-clip jump cut.
+
+      // Respect the clip's individual seek setting; fall back to defaultSeek if unset.
+      const mode = c.seekMode ?? defaultSeek.mode;
+      const manualSec = c.seekSeconds ?? defaultSeek.manualSeconds ?? 0;
+
       const sourceIn =
-        seek.mode === "beginning"
+        mode === "beginning"
           ? 0
-          : seek.mode === "manual"
-            ? round2(Math.min(maxStart, Math.max(0, Number(seek.manualSeconds) || 0)))
+          : mode === "manual"
+            ? round2(Math.min(maxStart, Math.max(0, Number(manualSec) || 0)))
             : round2(Math.random() * maxStart);
+
       const sourceOut = round2(Math.min(c.duration, sourceIn + sourceSpan));
       return {
         media_asset_id: c.id,
