@@ -387,6 +387,8 @@ export type Database = {
           hook_placement: string
           id: string
           project_id: string | null
+          seek_mode: string
+          seek_seconds: number
           size_bytes: number | null
           storage_path: string
           tags: string[]
@@ -406,6 +408,8 @@ export type Database = {
           hook_placement?: string
           id?: string
           project_id?: string | null
+          seek_mode?: string
+          seek_seconds?: number
           size_bytes?: number | null
           storage_path: string
           tags?: string[]
@@ -425,6 +429,8 @@ export type Database = {
           hook_placement?: string
           id?: string
           project_id?: string | null
+          seek_mode?: string
+          seek_seconds?: number
           size_bytes?: number | null
           storage_path?: string
           tags?: string[]
