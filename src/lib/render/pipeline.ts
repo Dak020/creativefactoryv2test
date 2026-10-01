@@ -14,8 +14,8 @@ import { resolveRenderUrl } from "./output";
 
 export const RENDER_BUCKET = "renders";
 export const CLIP_SECONDS = 8;
-export const OUT_W = 1080;
-export const OUT_H = 1920;
+export const QUANTITY_PRESETS = [1, 5, 10, 20, 30] as const;
+export const MAX_QUANTITY = 30;
 
 export type RenderStage =
   | "queued"
