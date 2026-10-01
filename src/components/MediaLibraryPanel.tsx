@@ -49,6 +49,8 @@ export type MediaAsset = {
   hook_placement: string | null;
   dna_role: string | null;
   allowed_speeds: number[] | null;
+  seek_mode?: "random" | "beginning" | "manual" | null;
+  seek_seconds?: number | null;
   created_at: string;
 };
 
@@ -60,7 +62,6 @@ const DNA_ROLE_OPTIONS = [
 ] as const;
 
 const DNA_SPEED_OPTIONS = [1, 1.5, 1.7, 2] as const;
-
 
 type UploadDiagnostic = {
   stage: string;
@@ -136,6 +137,8 @@ export function MediaLibraryPanel({ projectId }: { projectId?: string }) {
   const [editTags, setEditTags] = useState("");
   const [editDnaRole, setEditDnaRole] = useState<string>("none");
   const [editSpeeds, setEditSpeeds] = useState<number[]>([...DNA_SPEED_OPTIONS]);
+  const [editSeekMode, setEditSeekMode] = useState<"random" | "beginning" | "manual">("random");
+  const [editSeekSeconds, setEditSeekSeconds] = useState("0");
 
   const [uploadDiagnostics, setUploadDiagnostics] = useState<UploadDiagnostic[]>([]);
   const [uploadError, setUploadError] = useState<string | null>(null);
@@ -147,7 +150,6 @@ export function MediaLibraryPanel({ projectId }: { projectId?: string }) {
     creepRef.current = null;
   }
 
-  /** Move the bar to `pct` and, optionally, creep slowly toward `ceiling`. */
   function setPhase(pct: number, label: string, ceiling?: number) {
     stopCreep();
     setProgress({ pct, label });
@@ -169,7 +171,6 @@ export function MediaLibraryPanel({ projectId }: { projectId?: string }) {
     ]);
   }
 
-
   const { data: assets, isLoading } = useQuery({
     queryKey: ["media", projectId ?? "all"],
     queryFn: async () => {
@@ -177,14 +178,10 @@ export function MediaLibraryPanel({ projectId }: { projectId?: string }) {
       if (projectId) q = q.eq("project_id", projectId);
       const { data, error } = await q;
       if (error) throw error;
-      return (data ?? []) as MediaAsset[];
+      return (data ?? []) as unknown as MediaAsset[];
     },
   });
 
-  // Only needed on the unscoped Media Library view — inside a specific
-  // project's own Media Library every clip already belongs to that one
-  // project, so a per-card tag would just repeat what the page is already
-  // showing.
   const { data: projectNames } = useQuery({
     queryKey: ["media-project-names"],
     enabled: !projectId,
@@ -263,7 +260,6 @@ export function MediaLibraryPanel({ projectId }: { projectId?: string }) {
 
         setPhase(at(0.15), `Reading ${name}`);
         const meta = await withTimeout(probeVideo(file), 15000, {
-
           duration: 0,
           width: 0,
           height: 0,
@@ -292,7 +288,6 @@ export function MediaLibraryPanel({ projectId }: { projectId?: string }) {
         if (upErr) throw new Error(`Storage upload failed for ${file.name}: ${upErr.message}`);
         setPhase(at(0.9), `Saving ${name}`);
 
-
         let thumbnailUrl: string | null = null;
         if (meta.thumb) {
           const thumbPath = `${userId}/${id}-thumb.jpg`;
@@ -307,7 +302,7 @@ export function MediaLibraryPanel({ projectId }: { projectId?: string }) {
           }
         }
 
-        const insertPayload = {
+        const insertPayload: Record<string, unknown> = {
           user_id: userId,
           project_id: projectId ?? null,
           storage_path: path,
@@ -319,11 +314,13 @@ export function MediaLibraryPanel({ projectId }: { projectId?: string }) {
           size_bytes: file.size,
           category: "Other",
           tags: [],
+          seek_mode: "random",
+          seek_seconds: 0,
         };
         logUploadDiagnostic("Before database insert", "pending", insertPayload);
         const insertResult = await supabase
           .from("media_assets")
-          .insert(insertPayload)
+          .insert(insertPayload as any)
           .select("*")
           .single();
         const { data: inserted, error: insErr } = insertResult;
@@ -388,8 +385,6 @@ export function MediaLibraryPanel({ projectId }: { projectId?: string }) {
     onSettled: () => setUploading(false),
   });
 
-
-
   const remove = useMutation({
     mutationFn: async (asset: MediaAsset) => {
       await supabase.storage.from("media").remove([asset.storage_path]);
@@ -405,16 +400,18 @@ export function MediaLibraryPanel({ projectId }: { projectId?: string }) {
   const saveEdit = useMutation({
     mutationFn: async () => {
       if (!editing) return;
+      const updatePayload: Record<string, unknown> = {
+        category: editCategory,
+        hook_placement: editPlacement,
+        tags: editTags.split(",").map((t) => t.trim()).filter(Boolean),
+        dna_role: editDnaRole === "none" ? null : editDnaRole,
+        allowed_speeds: editSpeeds.length > 0 ? [...editSpeeds].sort((a, b) => a - b) : [...DNA_SPEED_OPTIONS],
+        seek_mode: editSeekMode,
+        seek_seconds: Number(editSeekSeconds) || 0,
+      };
       const { error } = await supabase
         .from("media_assets")
-        .update({
-          category: editCategory,
-          hook_placement: editPlacement,
-          tags: editTags.split(",").map((t) => t.trim()).filter(Boolean),
-          dna_role: editDnaRole === "none" ? null : editDnaRole,
-          allowed_speeds: editSpeeds.length > 0 ? [...editSpeeds].sort((a, b) => a - b) : [...DNA_SPEED_OPTIONS],
-        })
-
+        .update(updatePayload as any)
         .eq("id", editing.id);
       if (error) throw error;
     },
@@ -552,55 +549,71 @@ export function MediaLibraryPanel({ projectId }: { projectId?: string }) {
         </div>
       ) : null}
 
-
       {isLoading ? (
-        <div className="panel flex items-center justify-center py-20">
-          <Loader2 className="size-5 animate-spin text-muted-foreground" />
+        <div className="flex justify-center py-12">
+          <Loader2 className="size-6 animate-spin text-muted-foreground" />
         </div>
       ) : filtered.length === 0 ? (
         <EmptyState
           icon={Film}
-          title={assets?.length ? "No clips match your filters" : "Your media library is empty"}
+          title="No clips match"
           description={
-            assets?.length
-              ? "Try a different category or clear the search."
-              : "Upload MP4 or MOV clips. We read duration and dimensions and grab a thumbnail automatically."
+            assets?.length === 0
+              ? "Upload raw footage to begin generating variations."
+              : "Try adjusting your search or category filter."
           }
           action={
-            <Button onClick={() => inputRef.current?.click()}>
-              <Upload className="size-4" />
-              Upload clips
-            </Button>
+            assets?.length === 0 ? (
+              <Button onClick={() => inputRef.current?.click()}>
+                <Upload className="size-4" />
+                Upload clips
+              </Button>
+            ) : undefined
           }
         />
       ) : (
-        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+        <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5">
           {filtered.map((asset) => (
-            <div key={asset.id} className="panel group overflow-hidden">
-              <button
-                type="button"
+            <div
+              key={asset.id}
+              className="group overflow-hidden rounded-lg border border-border bg-card transition hover:border-primary/50"
+            >
+              <div
+                role="button"
+                tabIndex={0}
+                className="relative aspect-video w-full cursor-pointer overflow-hidden bg-black focus:outline-none focus:ring-2 focus:ring-primary"
                 onClick={() => openPreview(asset)}
-                className="relative flex aspect-[9/16] w-full items-center justify-center overflow-hidden bg-surface-raised"
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" || e.key === " ") {
+                    e.preventDefault();
+                    openPreview(asset);
+                  }
+                }}
+                aria-label={`Preview ${asset.filename}`}
               >
                 {asset.thumbnail_url ? (
                   <img
                     src={asset.thumbnail_url}
-                    alt={`Preview frame of ${asset.filename}`}
+                    alt={asset.filename}
                     className="size-full object-cover"
                     loading="lazy"
                   />
                 ) : (
-                  <Film className="size-8 text-muted-foreground" />
+                  <div className="flex size-full items-center justify-center text-muted-foreground">
+                    <Film className="size-6" />
+                  </div>
                 )}
-                <span className="absolute inset-0 flex items-center justify-center bg-background/60 opacity-0 transition-opacity group-hover:opacity-100">
-                  <Play className="size-8 text-primary" />
-                </span>
-                <span className="absolute bottom-2 right-2 rounded bg-background/85 px-1.5 py-0.5 font-mono text-[10px]">
-                  {fmtDuration(asset.duration)}
-                </span>
-              </button>
+                <div className="absolute inset-0 flex items-center justify-center bg-black/30 opacity-0 transition group-hover:opacity-100">
+                  <Play className="size-8 text-white drop-shadow" />
+                </div>
+                {asset.duration ? (
+                  <span className="absolute bottom-1 right-1 rounded bg-black/80 px-1 py-0.5 font-mono text-[10px] text-white">
+                    {fmtDuration(asset.duration)}
+                  </span>
+                ) : null}
+              </div>
 
-              <div className="space-y-2 p-3">
+              <div className="space-y-1 p-2.5">
                 <p className="truncate text-xs font-medium" title={asset.filename}>
                   {asset.filename}
                 </p>
@@ -614,6 +627,11 @@ export function MediaLibraryPanel({ projectId }: { projectId?: string }) {
                   {asset.dna_role && (
                     <Badge variant="outline" className="border-primary text-[10px] capitalize text-primary">
                       DNA: {asset.dna_role}
+                    </Badge>
+                  )}
+                  {asset.seek_mode && asset.seek_mode !== "random" && (
+                    <Badge variant="outline" className="text-[10px]">
+                      {asset.seek_mode === "beginning" ? "0:00" : `${asset.seek_seconds ?? 0}s`}
                     </Badge>
                   )}
                   {projectNames && (
@@ -646,9 +664,10 @@ export function MediaLibraryPanel({ projectId }: { projectId?: string }) {
                           ? asset.allowed_speeds.map(Number)
                           : [...DNA_SPEED_OPTIONS],
                       );
+                      setEditSeekMode(asset.seek_mode ?? "random");
+                      setEditSeekSeconds(String(asset.seek_seconds ?? 0));
                     }}
                   >
-
                     <Tag className="size-3" />
                     Tag
                   </Button>
@@ -686,7 +705,6 @@ export function MediaLibraryPanel({ projectId }: { projectId?: string }) {
           ) : null}
         </DialogContent>
       </Dialog>
-
 
       <Dialog open={Boolean(editing)} onOpenChange={(o) => !o && setEditing(null)}>
         <DialogContent className="sm:max-w-md">
@@ -742,6 +760,41 @@ export function MediaLibraryPanel({ projectId }: { projectId?: string }) {
                 None keeps this clip out of DNA edits — it renders exactly as it does today.
               </p>
             </div>
+
+            <div className="space-y-2">
+              <Label>Start point in clip</Label>
+              <div className="flex items-center gap-2">
+                <Select value={editSeekMode} onValueChange={(v) => setEditSeekMode(v as any)}>
+                  <SelectTrigger className="flex-1">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="random">Random (fresh section each render)</SelectItem>
+                    <SelectItem value="beginning">From the beginning (0:00)</SelectItem>
+                    <SelectItem value="manual">Choose a time</SelectItem>
+                  </SelectContent>
+                </Select>
+                {editSeekMode === "manual" && (
+                  <Input
+                    type="number"
+                    min={0}
+                    step={0.5}
+                    value={editSeekSeconds}
+                    onChange={(e) => setEditSeekSeconds(e.target.value)}
+                    placeholder="0.0"
+                    className="w-24"
+                  />
+                )}
+              </div>
+              <p className="text-[11px] text-muted-foreground">
+                {editSeekMode === "beginning"
+                  ? "Always starts on the first frame (best for spoken hooks and intro clips)."
+                  : editSeekMode === "manual"
+                    ? `Always starts at ${Number(editSeekSeconds) || 0}s into this clip.`
+                    : "Picks a random section on every render (best for B-roll)."}
+              </p>
+            </div>
+
             <div className="space-y-2">
               <Label>Playback speed</Label>
               <div className="flex flex-wrap gap-2">
