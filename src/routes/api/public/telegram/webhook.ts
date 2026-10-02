@@ -182,11 +182,11 @@ export const Route = createFileRoute("/api/public/telegram/webhook")({
               chatId,
               `🎬 <b>Choose Render Style for ${esc(projectName)}</b>\n\n` +
               `• <b>Single Render (8s):</b> Fast single-clip render. Auto-saved directly to your library without needing approval.\n\n` +
-              `• <b>Clip DNA Render (8s):</b> Combines 2 different clips into a multi-clip dynamic video. Sends a 9:16 preview to Telegram for your approval before saving.`,
+              `• <b>Clip DNA Render (8s):</b> Combines 2+ DNA-tagged clips into a multi-clip dynamic video using the app's own DNA solver. Sends a 9:16 preview to Telegram for your approval before saving.`,
               {
                 inline_keyboard: [
-                  [{ text: "⚡ Single Render (8s, Auto-save)", callback_data: `do_render:single:${projectId}:${projectName}` }],
-                  [{ text: "🧬 Clip DNA (2 Clips, Preview & Approve)", callback_data: `do_render:dna:${projectId}:${projectName}` }],
+                  [{ text: "⚡ Single Render (8s, Auto-save)", callback_data: `pick_audio:single:${projectId}:${projectName}` }],
+                  [{ text: "🧬 Clip DNA (Multi-clip, Preview & Approve)", callback_data: `pick_audio:dna:${projectId}:${projectName}` }],
                   [{ text: "🔙 Back to Project", callback_data: `open_project:${projectId}` }],
                 ],
               }
@@ -194,9 +194,81 @@ export const Route = createFileRoute("/api/public/telegram/webhook")({
             return Response.json({ ok: true });
           }
 
-          // Execute queueing based on selected style
-          if (data.startsWith("do_render:")) {
+          // Pick the audio strategy (mirrors the web app's AudioStrategySelector)
+          if (data.startsWith("pick_audio:")) {
             const [_, style, projectId, projectName] = data.split(":");
+            await answerCallback(callbackId);
+
+            await sendText(
+              chatId,
+              `🎵 <b>Now choose the sound for this ${style === "dna" ? "Clip DNA" : "Single"} render in ${esc(projectName)}</b>`,
+              {
+                inline_keyboard: [
+                  [{ text: "🔊 Original clip audio", callback_data: `pick_mode:original:${style}:${projectId}:${projectName}` }],
+                  [{ text: "🤖 VA auto-pick trending sound", callback_data: `pick_mode:auto:${style}:${projectId}:${projectName}` }],
+                  [{ text: "📚 Pick from audio library", callback_data: `pick_library:${style}:${projectId}:${projectName}` }],
+                  [{ text: "🔇 No sound (silent)", callback_data: `pick_mode:none:${style}:${projectId}:${projectName}` }],
+                  [{ text: "🔙 Back", callback_data: `choose_style:${projectId}:${projectName}` }],
+                ],
+              }
+            );
+            return Response.json({ ok: true });
+          }
+
+          // Browse the user's own audio library for a specific track
+          if (data.startsWith("pick_library:")) {
+            const [_, style, projectId, projectName] = data.split(":");
+            await answerCallback(callbackId);
+
+            const { data: link } = await db().from("telegram_links").select("user_id").eq("chat_id", chatId).maybeSingle();
+            if (!link?.user_id) {
+              await sendText(chatId, "Please connect your Telegram account first in Settings.");
+              return Response.json({ ok: true });
+            }
+
+            const { data: audios } = await db()
+              .from("trending_audios")
+              .select("id, title, author")
+              .eq("user_id", link.user_id)
+              .neq("source", "seed_placeholder")
+              .order("created_at", { ascending: false })
+              .limit(10);
+
+            if (!audios || audios.length === 0) {
+              await sendText(
+                chatId,
+                "📚 Your saved audio library is empty. Import sounds in the web app's Audio Library first.",
+                {
+                  inline_keyboard: [[{ text: "🔙 Back", callback_data: `pick_audio:${style}:${projectId}:${projectName}` }]],
+                }
+              );
+              return Response.json({ ok: true });
+            }
+
+            await sendText(
+              chatId,
+              "📚 <b>Pick a sound from your library:</b>",
+              {
+                inline_keyboard: [
+                  ...audios.map((a) => [{
+                    text: `🎵 ${(a.title || "Untitled").slice(0, 30)}`,
+                    callback_data: `pick_mode:lib:${style}:${projectId}:${projectName}:${a.id}`,
+                  }]),
+                  [{ text: "🔙 Back", callback_data: `pick_audio:${style}:${projectId}:${projectName}` }],
+                ],
+              }
+            );
+            return Response.json({ ok: true });
+          }
+
+          // Execute queueing based on selected style + audio mode
+          if (data.startsWith("pick_mode:")) {
+            const parts = data.split(":");
+            const audioMode = parts[1]; // "original" | "auto" | "none" | "lib"
+            const style = parts[2];
+            const projectId = parts[3];
+            const projectName = parts[4];
+            const audioId = parts[5] || null; // only for "lib"
             await answerCallback(callbackId, "Queueing render...");
 
             const { data: link } = await db().from("telegram_links").select("user_id").eq("chat_id", chatId).maybeSingle();
@@ -228,26 +300,83 @@ export const Route = createFileRoute("/api/public/telegram/webhook")({
               return Response.json({ ok: true });
             }
 
-            // 2. Fetch clips
-            const { data: clips } = await db()
+            // 2. Fetch clips — project-scoped, DNA-role-tagged for DNA renders
+            let clipsQuery = db()
               .from("media_assets")
-              .select("id, duration, storage_path")
+              .select("id, duration, storage_path, dna_role")
               .eq("user_id", link.user_id)
-              .order("created_at", { ascending: false })
-              .limit(style === "dna" ? 2 : 1);
+              .eq("project_id", projectId);
 
-            if (!clips || clips.length === 0) {
-              await sendText(
-                chatId,
-                `⚠️ <b>No media clips found!</b>\nPlease upload at least one video clip in the web app before rendering.`,
-                {
-                  inline_keyboard: [[{ text: "🔙 Back to Project", callback_data: `open_project:${projectId}` }]],
-                }
-              );
+            if (style === "dna") {
+              clipsQuery = clipsQuery.in("dna_role", ["start", "middle", "end"]);
+            }
+
+            const { data: clips, error: clipsErr } = await clipsQuery
+              .order("created_at", { ascending: false })
+              .limit(style === "dna" ? 6 : 1);
+
+            if (clipsErr || !clips || clips.length === 0) {
+              const why = style === "dna"
+                ? `No DNA-tagged clips found in <b>${esc(projectName)}</b>.\nTag at least 2 clips with a DNA role (start / middle / end) in the web app first.`
+                : `No media clips found in <b>${esc(projectName)}</b>.\nPlease upload at least one video clip in the web app before rendering.`;
+              await sendText(chatId, `⚠️ ${why}`, {
+                inline_keyboard: [[{ text: "🔙 Back to Project", callback_data: `open_project:${projectId}` }]],
+              });
               return Response.json({ ok: true });
             }
 
-            // 3. Create video recipe with fixed 8s duration (not full clip duration)
+            // 3. Resolve audio for render — mirrors the app's prepareAudioForRenderFn
+            let soundtrackUrl: string | null = null;
+            let audioLabel = "No sound (silent)";
+            let withAudio = false;
+
+            try {
+              if (audioMode === "original") {
+                withAudio = true;
+                audioLabel = "Original clip audio";
+              } else if (audioMode === "auto") {
+                // Reuse getAutoPickAudioFn logic directly: top-15 virality, random pick
+                const { data: autoRows } = await db()
+                  .from("trending_audios")
+                  .select("id, title, author, storage_path, audio_url, virality_score, region")
+                  .eq("region", "global")
+                  .neq("source", "seed_placeholder")
+                  .order("virality_score", { ascending: false })
+                  .limit(15);
+                if (autoRows && autoRows.length > 0) {
+                  const picked = autoRows[Math.floor(Math.random() * autoRows.length)]!;
+                  const resolved = await resolveAudioUrlForRender(picked, link.user_id);
+                  if (resolved) {
+                    soundtrackUrl = resolved;
+                    audioLabel = `VA picked: ${picked.title}`;
+                  } else {
+                    audioLabel = "VA auto-pick failed — rendering silent";
+                  }
+                } else {
+                  audioLabel = "No trending sounds available — rendering silent";
+                }
+              } else if (audioMode === "lib" && audioId) {
+                const { data: picked } = await db()
+                  .from("trending_audios")
+                  .select("id, title, author, storage_path, audio_url")
+                  .eq("id", audioId)
+                  .maybeSingle();
+                if (picked) {
+                  const resolved = await resolveAudioUrlForRender(picked, link.user_path_ish(link.user_id));
+                  if (resolved) {
+                    soundtrackUrl = resolved;
+                    audioLabel = `Library: ${picked.title}`;
+                  } else {
+                    audioLabel = "Chosen library sound could not be loaded — rendering silent";
+                  }
+                }
+              }
+            } catch (audioErr) {
+              console.error("audio resolve error", audioErr);
+              audioLabel = "Audio prep failed — rendering silent";
+            }
+
+            // 4. Create video recipe with fixed 8s duration + audio settings baked in
             const targetDuration = 8;
             const primaryClip = clips[0]!;
 
@@ -275,7 +404,26 @@ export const Route = createFileRoute("/api/public/telegram/webhook")({
               return Response.json({ ok: true });
             }
 
-            // 4. Insert render job
+            // 5. Store the audio decision + full clip list for the worker.
+            //    Uses the recipe's own row (as a JSON payload inside
+            //    background_color is too small) — instead we write a
+            //    `render_job_hints` row keyed by recipe id.
+            const { error: hintErr } = await db().from("render_job_hints").insert({
+              recipe_id: recipe.id,
+              user_id: link.user_id,
+              with_audio: withAudio,
+              soundtrack_url: soundtrackUrl,
+              audio_label: audioLabel,
+              clip_ids: clips.map((c) => c.id),
+              style,
+            });
+            if (hintErr) {
+              console.error("render_job_hints insert failed", hintErr);
+              await sendText(chatId, `❌ Failed to store render settings: ${esc(hintErr.message)}`);
+              return Response.json({ ok: true });
+            }
+
+            // 6. Insert render job
             const { error: jobErr } = await db().from("render_jobs").insert({
               user_id: link.user_id,
               project_id: projectId,
@@ -287,11 +435,12 @@ export const Route = createFileRoute("/api/public/telegram/webhook")({
             if (jobErr) {
               await sendText(chatId, `❌ Could not queue render: ${esc(jobErr.message)}`);
             } else {
-              const modeLabel = style === "dna" ? "🧬 Clip DNA (Multi-clip, 8s)" : "⚡ Single Clip (8s)";
+              const modeLabel = style === "dna" ? "🧬 Clip DNA (Multi-clip)" : "⚡ Single Clip";
               await sendText(
                 chatId,
                 `🚀 <b>Render Queued for ${esc(projectName)}!</b>\n\n` +
                 `• <b>Style:</b> ${modeLabel}\n` +
+                `• <b>Sound:</b> ${esc(audioLabel)}\n` +
                 `• <b>Duration:</b> ${targetDuration} seconds\n` +
                 `• <b>Hook:</b> "${esc(hook.text)}"\n` +
                 `• <b>Status:</b> Queued\n\n` +
@@ -325,7 +474,6 @@ export const Route = createFileRoute("/api/public/telegram/webhook")({
 
             const { data: link } = await db().from("telegram_links").select("user_id").eq("chat_id", chatId).maybeSingle();
             if (link?.user_id) {
-              // Find the render job
               let jobQuery = db().from("render_jobs").select("*");
               if (jobId && jobId !== "last") {
                 jobQuery = jobQuery.eq("id", jobId);
@@ -350,6 +498,12 @@ export const Route = createFileRoute("/api/public/telegram/webhook")({
                   duration: recipe?.duration ?? 8,
                   status: "completed",
                 });
+
+                // Mark job as truly completed now that it's saved
+                await db()
+                  .from("render_jobs")
+                  .update({ status: "completed", completed_at: new Date().toISOString() })
+                  .eq("id", job.id);
 
                 await sendText(
                   chatId,
@@ -384,7 +538,7 @@ export const Route = createFileRoute("/api/public/telegram/webhook")({
         }
 
         if (msg.reply_to_message?.text && msg.reply_to_message.text.includes("Reply directly to this message with your hook text")) {
-          const idMatch = msg.reply_to_message.text.match(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i);
+          const idMatch = msg.reply_to_message.text.match(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i);
           if (idMatch) {
             const projectId = idMatch[0];
 
@@ -395,7 +549,7 @@ export const Route = createFileRoute("/api/public/telegram/webhook")({
               .maybeSingle();
 
             if (link?.user_id) {
-              const { error: insertErr } = await db().from("hooks").insert({
+              const { error: insertErr } = await db().hooks.insert({
                 user_id: link.user_id,
                 project_id: projectId,
                 text: text,
@@ -456,12 +610,7 @@ export const Route = createFileRoute("/api/public/telegram/webhook")({
                   callback_data: `open_project:${p.id}`,
                 },
               ]);
-
-              await sendText(
-                chatId,
-                "📁 <b>Your Projects:</b>\nTap any project below to open its workspace and actions:",
-                { inline_keyboard: inlineKeyboard }
-              );
+              await sendText(chatId, "📁 <b>Your Projects:</b>\nTap any project below to open its workspace and actions:", { inline_keyboard: inlineKeyboard });
             }
             return Response.json({ ok: true });
           }
@@ -477,19 +626,10 @@ export const Route = createFileRoute("/api/public/telegram/webhook")({
               await sendText(chatId, "📁 You don't have any projects yet. Create a project in the app first.");
               return Response.json({ ok: true });
             }
-
             const inlineKeyboard = projs.slice(0, 8).map((p) => [
-              {
-                text: `📁 ${p.name.slice(0, 25)}`,
-                callback_data: `select_project_hook:${p.id}:${p.name.slice(0, 20)}`,
-              },
+              { text: `📁 ${p.name.slice(0, 25)}`, callback_data: `select_project_hook:${p.id}:${p.name.slice(0, 20)}` },
             ]);
-
-            await sendText(
-              chatId,
-              "🎯 <b>Select the project</b> to add a hook to:",
-              { inline_keyboard: inlineKeyboard }
-            );
+            await sendText(chatId, "🎯 <b>Select the project</b> to add a hook to:", { inline_keyboard: inlineKeyboard });
             return Response.json({ ok: true });
           }
 
@@ -499,10 +639,7 @@ export const Route = createFileRoute("/api/public/telegram/webhook")({
           if (error) throw error;
           const res = data as { linked: boolean; data: unknown };
           if (!res?.linked) {
-            await sendText(
-              chatId,
-              "Hi! Open Settings in the Creative Factory app and tap <b>Connect Telegram</b> to link me to your account."
-            );
+            await sendText(chatId, "Hi! Open Settings in the Creative Factory app and tap <b>Connect Telegram</b> to link me to your account.");
           } else {
             await sendText(chatId, command === "help" ? HELP : format(command, res.data));
           }
