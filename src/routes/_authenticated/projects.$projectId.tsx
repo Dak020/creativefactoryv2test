@@ -1,116 +1,122 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { createFileRoute } from "@tanstack/react-router";
+import { createFileRoute, Link } from "@tanstack/react-router";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useServerFn } from "@tanstack/react-start";
 import { toast } from "sonner";
 import {
-  Sparkles,
-  Layers,
-  FileText,
-  Film,
-  Calendar,
-  Send,
+  ArrowLeft,
+  CalendarClock,
+  ChevronDown,
+  Download,
   Loader2,
-  Trash2,
-  AlertCircle,
-  HelpCircle,
-  FolderOpen,
+  Play,
+  Sparkles,
+  Trophy,
 } from "lucide-react";
-
+import { ScheduleTikTokDialog } from "@/components/ScheduleTikTokDialog";
+import { AudioStrategySelector, type AudioSelection } from "@/components/AudioStrategySelector";
+import { resolveAudioForRender } from "@/lib/audio-url";
+import { prepareAudioForRenderFn } from "@/lib/audio.functions";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/useAuth";
+import { MediaLibraryPanel } from "@/components/MediaLibraryPanel";
+import { HookLibraryPanel } from "@/components/HookLibraryPanel";
+import { EmptyState, PageHeader, StatCard, StatusPill } from "@/components/ui-kit";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Progress } from "@/components/ui/progress";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import { fmtDate, audienceSummary, signedUrl } from "@/lib/db";
+import { downloadRender, renderFilename, resolveRenderUrl } from "@/lib/render/output";
+import {
+  CLIP_SECONDS,
+  STAGE_LABEL,
+  reapStaleJobs,
+  cancelQueuedJobs,
   runBatch,
   runMultiClipBatch,
-  MAX_QUANTITY,
-  QUANTITY_PRESETS,
-  signedUrl,
-  reapStaleJobs,
-  STAGE_LABEL,
-  STAGE_ICON,
   type BatchItem,
-  type RenderStage,
 } from "@/lib/render/pipeline";
+import { Checkbox } from "@/components/ui/checkbox";
+import { checkRoles } from "@/lib/dna/solver";
+import type { SeekMode } from "@/lib/render/browser-render";
 import {
   planDna,
   runDnaVariant,
+  runDnaBatch,
+  describePlan,
   commitDnaPreview,
   deleteDnaPreview,
   type DnaClip,
   type DnaPlan,
 } from "@/lib/render/dna-pipeline";
-import { checkRoles } from "@/lib/dna/solver";
-import { resolveRenderUrl } from "@/lib/render/output";
-import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
-import { Badge } from "@/components/ui/badge";
-import { Progress } from "@/components/ui/progress";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@/components/ui/table";
-import {
-  Tooltip,
-  TooltipContent,
-  TooltipProvider,
-  TooltipTrigger,
-} from "@/components/ui/tooltip";
-import {
-  AudioStrategySelector,
-  type AudioSelection,
-} from "@/components/AudioStrategySelector";
-import { HookLibraryPanel } from "@/components/HookLibraryPanel";
-import { MediaLibraryPanel } from "@/components/MediaLibraryPanel";
-import { HookGeneratorDialog } from "@/components/HookGeneratorDialog";
-import { ScheduleTikTokDialog } from "@/components/ScheduleTikTokDialog";
-import { RenderPlayer } from "@/components/RenderPlayer";
-import { RenderFeedback } from "@/components/RenderFeedback";
+
+import { deleteRender } from "@/lib/render/delete";
 import { DeleteRenderButton } from "@/components/DeleteRenderButton";
-import { prepareAudioForRenderFn } from "@/lib/audio.functions";
-import { resolveAudioForRender } from "@/lib/audio-url";
-import { useServerFn } from "@tanstack/react-start";
+import { RenderPlayer } from "@/components/RenderPlayer";
+import { platformLabel, styleLabel } from "@/lib/constants";
+
+const QUANTITY_PRESETS = [1, 5, 10, 20, 30] as const;
+const MAX_QUANTITY = 30;
 
 export const Route = createFileRoute("/_authenticated/projects/$projectId")({
-  component: ProjectDetailPage,
   head: () => ({
     meta: [
-      { title: "Project Workspace — Creative Factory AI Assistant" },
+      { title: "Project workspace — Creative Factory" },
       {
         name: "description",
-        content: "Generate and manage video variants for this project.",
+        content: "Media, hooks, batch generation and render queue for this project.",
+      },
+      { property: "og:title", content: "Project workspace — Creative Factory" },
+      {
+        property: "og:description",
+        content: "Produce short-form video batches from hooks and clips.",
       },
     ],
   }),
+  component: ProjectWorkspace,
 });
 
-function StatusPill({ status }: { status: string }) {
-  const Icon = STAGE_ICON[status as RenderStage] ?? AlertCircle;
-  return (
-    <span className="inline-flex items-center gap-1 font-mono text-xs text-muted-foreground">
-      <Icon className="size-3" />
-      {status}
-    </span>
-  );
-}
-
-function ProjectDetailPage() {
+function ProjectWorkspace() {
   const { projectId } = Route.useParams();
   const { user } = useAuth();
   const qc = useQueryClient();
-
-  const [quantityChoice, setQuantityChoice] = useState<string>("8");
+  const [running, setRunning] = useState(false);
+  const [scheduleTarget, setScheduleTarget] = useState<{
+    id: string;
+    hookText: string | null;
+  } | null>(null);
+  const batchAbortRef = useRef<AbortController | null>(null);
+  const dnaAbortRef = useRef<AbortController | null>(null);
+  const [quantityChoice, setQuantityChoice] = useState("5");
   const [customQuantity, setCustomQuantity] = useState("8");
   const [live, setLive] = useState<BatchItem[]>([]);
   const [showJobHistory, setShowJobHistory] = useState(false);
 
+  // Same multi-clip rule as Studio: with 2+ clips selected, one batch is split
+  // evenly across them (remainder randomly assigned). Defaults to every clip
+  // in the project's media library.
   const [selectedClipIds, setSelectedClipIds] = useState<string[] | null>(null);
 
+  // Clip DNA: combine role-tagged clips into one edit instead of a single
+  // clip + hook. Separate running/progress state from the existing
+  // single-clip flow above, since a DNA render and a regular render are
+  // different pipelines that can't run at the same time from this page.
   const [targetDuration, setTargetDuration] = useState("8");
+  const [dnaSeekMode, setDnaSeekMode] = useState<SeekMode>("random");
+  const [dnaManualSeek, setDnaManualSeek] = useState("0");
+  const dnaSeek = { mode: dnaSeekMode, manualSeconds: Number(dnaManualSeek) || 0 };
+  // How many DNA variants a single approval produces (the approved preview
+  // counts as the first one). Selectable instead of following the single-clip
+  // batch quantity.
   const [dnaQuantity, setDnaQuantity] = useState("4");
   const prepareAudioForRender = useServerFn(prepareAudioForRenderFn);
   const [audioSelection, setAudioSelection] = useState<AudioSelection>({
@@ -141,6 +147,7 @@ function ProjectDetailPage() {
     return Math.min(MAX_QUANTITY, Math.max(1, n));
   }, [dnaQuantity]);
 
+  // Abandoned jobs (closed tab, crashed render) must not sit in the queue forever.
   useEffect(() => {
     if (!user) return;
     void reapStaleJobs(user.id, projectId).then(() =>
@@ -149,6 +156,7 @@ function ProjectDetailPage() {
   }, [user?.id, projectId, qc]);
 
   const { data, isLoading } = useQuery({
+    // Scoped to the signed-in user so a different account never reads this cache.
     queryKey: ["project", projectId, user?.id ?? "anon"],
     enabled: Boolean(user),
     staleTime: 15_000,
@@ -170,7 +178,7 @@ function ProjectDetailPage() {
         supabase.from("hooks").select("id, text").eq("project_id", projectId),
         supabase
           .from("media_assets")
-          .select("id, filename, duration, storage_path, hook_placement, dna_role, allowed_speeds, seek_mode, seek_seconds")
+          .select("id, filename, duration, storage_path, hook_placement, dna_role, allowed_speeds")
           .eq("project_id", projectId)
           .order("created_at", { ascending: false }),
       ]);
@@ -187,22 +195,35 @@ function ProjectDetailPage() {
         jobs: jobs.data ?? [],
         videos: videoRows,
         hooks: hooks.data ?? [],
-        media: (media.data ?? []) as any[],
+        media: media.data ?? [],
       };
+    },
+    // Only poll while something is actually in flight.
+    refetchInterval: (q) => {
+      if (running) return false;
+      const active = (q.state.data?.jobs ?? []).some(
+        (j: { status: string }) => j.status === "queued" || j.status === "processing",
+      );
+      return active ? 8000 : false;
     },
   });
 
-  const [running, setRunning] = useState(false);
-  const [scheduleItem, setScheduleItem] = useState<{ id: string; url: string; hook: string } | null>(null);
-  const batchAbortRef = useRef<AbortController | null>(null);
-  const dnaAbortRef = useRef<AbortController | null>(null);
-
-  const mediaList = data?.media ?? [];
+  const mediaList = useMemo(() => data?.media ?? [], [data?.media]);
   const activeClipIds = useMemo(
-    () => selectedClipIds ?? mediaList.map((m) => m.id),
+    () =>
+      (selectedClipIds ?? mediaList.map((m) => m.id)).filter((id) =>
+        mediaList.some((m) => m.id === id),
+      ),
     [selectedClipIds, mediaList],
   );
 
+  // Only clips actually tagged with a DNA role participate — untagged clips
+  // in this same project are invisible to DNA and keep working with the
+  // regular single/multi-clip flow above. Also respects the same clip
+  // selection/filter as the regular batch flow (activeClipIds) — DNA should
+  // only draw from clips the user has actually selected for this batch, not
+  // silently pull in every DNA-tagged clip in the whole project regardless
+  // of what's currently filtered.
   const dnaClips = useMemo(
     () =>
       mediaList
@@ -219,8 +240,6 @@ function ProjectDetailPage() {
           hookPlacement: m.hook_placement,
           filename: m.filename,
           storage_path: m.storage_path,
-          seekMode: (m.seek_mode as "random" | "beginning" | "manual") || "random",
-          seekSeconds: Number(m.seek_seconds) || 0,
         })),
     [mediaList, activeClipIds],
   );
@@ -235,6 +254,8 @@ function ProjectDetailPage() {
 
   async function generateBatch() {
     if (!user) return;
+    // Guard against a second click landing while the sound is still being
+    // prepared — two renders at once stall the video and ruin the export.
     if (running) return;
 
     const hooks = data?.hooks ?? [];
@@ -277,8 +298,8 @@ function ProjectDetailPage() {
             filename: a.filename,
             duration: a.duration,
             storage_path: a.storage_path,
-            url: a.url,
             hook_placement: a.hook_placement,
+            url: a.url,
           })),
           hooks: hookList,
           quantity: count,
@@ -289,13 +310,13 @@ function ProjectDetailPage() {
         const asset = chosenAssets[0]!;
         const url = await signedUrl("media", asset.storage_path, 60 * 60 * 6);
         if (!url) {
-          toast.error("Could not load clip from storage");
+          toast.error("The source clip could not be read from storage.");
           return;
         }
         items = await runBatch({
           userId: user.id,
           projectId,
-          assetId: asset.id,
+          asset,
           assetUrl: url,
           hooks: hookList,
           quantity: count,
@@ -328,6 +349,8 @@ function ProjectDetailPage() {
     toast.info("Render cancelled.");
   }
 
+  /** Sign a playable URL for every DNA-tagged clip. Returns null (with a
+   *  toast) if any clip's file can't be read from storage. */
   async function resolveDnaClips(): Promise<DnaClip[] | null> {
     const withUrls = await Promise.all(
       dnaClips.map(async (c): Promise<DnaClip | null> => {
@@ -343,6 +366,7 @@ function ProjectDetailPage() {
     return ready;
   }
 
+  /** Resolves the currently-selected soundtrack (if any) to a render-safe URL. */
   async function resolveSoundtrack(): Promise<string | undefined> {
     if (!audioSelection.audio) return undefined;
     const resolved = await resolveAudioForRender(audioSelection.audio, prepareAudioForRender);
@@ -376,13 +400,16 @@ function ProjectDetailPage() {
     setDnaLive([]);
     setDnaPreview(null);
     if (previousPreview) {
-      deleteDnaPreview(previousPreview.item).catch(() => {});
+      deleteDnaPreview(previousPreview.item).catch(() => {
+        // Best-effort — a failed cleanup here just leaves one orphaned file,
+        // not worth blocking the next preview render over.
+      });
     }
     try {
       const clips = await resolveDnaClips();
       if (!clips) return;
 
-      const planned = planDna(clips, target);
+      const planned = planDna(clips, target, dnaSeek);
       if (!planned.ok) {
         toast.error(planned.reason);
         return;
@@ -421,88 +448,84 @@ function ProjectDetailPage() {
     }
   }
 
-  async function approveDnaPreviewAndRenderRemaining() {
+  async function approveDna() {
     if (!user || !dnaPreview) return;
-    if (dnaRunning) return;
-
     const hooks = data?.hooks ?? [];
     if (hooks.length === 0) {
       toast.error("Add at least one hook to this project first.");
       return;
     }
-    const totalCount = dnaCount;
-    const controller = new AbortController();
-    dnaAbortRef.current = controller;
-    setDnaRunning(true);
 
     try {
-      toast.info("Approving preview…");
-      const approvedItem = await commitDnaPreview({
+      await commitDnaPreview({
         userId: user.id,
         projectId,
         item: dnaPreview.item,
-        plan: dnaPreview.plan,
         hook: dnaPreview.hook,
+        plan: dnaPreview.plan,
       });
+    } catch (e) {
+      toast.error(`Could not save the approved preview: ${(e as Error).message}`);
+      return;
+    }
 
-      const items: BatchItem[] = [approvedItem];
-      setDnaLive([approvedItem]);
-
-      const remaining = totalCount - 1;
-      const soundtrackUrl = await resolveSoundtrack();
-
-      for (let i = 0; i < remaining; i++) {
-        if (controller.signal.aborted) break;
-        const rePlan = planDna(dnaPreview.clips, Number(targetDuration));
-        if (!rePlan.ok) continue;
-
-        const hookList = hooks.map((h) => ({ id: h.id, text: h.text }));
-        const randomHook = hookList[Math.floor(Math.random() * hookList.length)]!;
-
-        const next = await runDnaVariant({
-          userId: user.id,
-          projectId,
-          plan: rePlan.plan,
-          hook: randomHook,
-          withAudio: audioSelection.withAudio,
-          soundtrackUrl,
-          signal: controller.signal,
-          isPreview: false,
-          onUpdate: (updated) => {
-            setDnaLive((current) => {
-              const idx = current.findIndex((c) => c.jobId === updated.jobId);
-              if (idx === -1) return [...current, updated];
-              const clone = [...current];
-              clone[idx] = updated;
-              return clone;
-            });
-          },
-        });
-        items.push(next);
-      }
-
+    const remaining = Math.max(0, dnaCount - 1);
+    if (remaining === 0) {
+      toast.success("Preview approved and saved.");
       setDnaPreview(null);
+      await qc.invalidateQueries({ queryKey: ["project", projectId] });
+      return;
+    }
+
+    const target = Number(targetDuration);
+    const controller = new AbortController();
+    dnaAbortRef.current = controller;
+    setDnaRunning(true);
+    setDnaLive([dnaPreview.item]);
+    try {
+      const hookList = hooks.map((h) => ({ id: h.id, text: h.text }));
+      const soundtrackUrl = await resolveSoundtrack();
+      const items = await runDnaBatch({
+        userId: user.id,
+        projectId,
+        clips: dnaPreview.clips,
+        hooks: hookList,
+        targetDuration: target,
+        seek: dnaSeek,
+        quantity: remaining,
+        withAudio: audioSelection.withAudio,
+        soundtrackUrl,
+        signal: controller.signal,
+        onUpdate: (updated) => setDnaLive([dnaPreview.item, ...updated]),
+      });
       const done = items.filter((i) => i.stage === "completed").length;
-      toast.success(`${done} of ${totalCount} DNA variants finished.`);
+      const cancelled = items.some((i) => i.error === "Cancelled");
+      if (cancelled)
+        toast.info(`Cancelled — ${done + 1} of ${dnaCount} DNA variants had already finished`);
+      else if (done === items.length)
+        toast.success(`${done + 1} of ${dnaCount} DNA variants rendered`);
+      else
+        toast.warning(`${done + 1} of ${dnaCount} DNA variants rendered — check the failed jobs`);
     } catch (e) {
       toast.error((e as Error).message);
     } finally {
       setDnaRunning(false);
       dnaAbortRef.current = null;
-      qc.invalidateQueries({ queryKey: ["project", projectId] });
+      setDnaPreview(null);
+      await qc.invalidateQueries({ queryKey: ["project", projectId] });
     }
   }
 
   async function discardDnaPreview() {
     if (!dnaPreview) return;
+    const item = dnaPreview.item;
+    setDnaPreview(null);
     try {
-      await deleteDnaPreview(dnaPreview.item);
-      toast.info("Preview discarded.");
-    } catch {
-      // Ignored
-    } finally {
-      setDnaPreview(null);
-      setDnaLive([]);
+      await deleteDnaPreview(item);
+    } catch (e) {
+      // Non-fatal: the preview is already cleared from the UI either way,
+      // this just means the orphaned file lingers in storage a bit longer.
+      toast.error(`Preview discarded, but cleanup failed: ${(e as Error).message}`);
     }
   }
 
@@ -510,14 +533,31 @@ function ProjectDetailPage() {
     if (!dnaAbortRef.current) return;
     dnaAbortRef.current.abort();
     dnaAbortRef.current = null;
+    // Don't wait for the render loop to unwind before the UI reacts — the
+    // button should stop spinning the moment it is tapped.
     setDnaRunning(false);
+    setDnaLive([]);
     toast.info("DNA render cancelled.");
+    if (user)
+      void cancelQueuedJobs(user.id, projectId).then(() =>
+        qc.invalidateQueries({ queryKey: ["project", projectId] }),
+      );
+  }
+
+  async function clearQueue() {
+    if (!user) return;
+    batchAbortRef.current?.abort();
+    dnaAbortRef.current?.abort();
+    const ok = await cancelQueuedJobs(user.id, projectId);
+    await qc.invalidateQueries({ queryKey: ["project", projectId] });
+    if (ok) toast.info("Queued renders cancelled.");
+    else toast.error("Could not cancel the queued renders.");
   }
 
   if (isLoading) {
     return (
-      <div className="flex h-96 items-center justify-center">
-        <Loader2 className="size-6 animate-spin text-muted-foreground" />
+      <div className="flex items-center justify-center py-24">
+        <Loader2 className="size-5 animate-spin text-muted-foreground" />
       </div>
     );
   }
@@ -525,39 +565,188 @@ function ProjectDetailPage() {
   const project = data?.project;
   if (!project) {
     return (
-      <div className="p-8">
-        <p className="text-muted-foreground">Project not found.</p>
-      </div>
+      <EmptyState
+        icon={Sparkles}
+        title="Project not found"
+        description="It may have been deleted."
+        action={
+          <Button asChild>
+            <Link to="/projects">Back to projects</Link>
+          </Button>
+        }
+      />
     );
   }
 
+  const requested = live.length;
+  const completed = live.filter((l) => l.stage === "completed").length;
+  const failed = live.filter((l) => l.stage === "failed");
+  const allJobs = data?.jobs ?? [];
+  const activeJobs = allJobs.filter((j) => j.status === "queued" || j.status === "processing");
+  const finishedJobs = allJobs.filter((j) => j.status !== "queued" && j.status !== "processing");
+  const queuedCount = activeJobs.length;
+
   return (
-    <div className="space-y-6 p-6">
-      <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-        <div>
-          <h1 className="text-2xl font-bold tracking-tight">{project.name}</h1>
-          <p className="text-sm text-muted-foreground">
-            {project.description || "Manage hooks, media clips, and video variants."}
-          </p>
-        </div>
-        <div className="flex items-center gap-2">
-          <HookGeneratorDialog
-            projectId={projectId}
-            productContext={data?.product?.name ? `${data.product.name} — ${data.product.description}` : ""}
-          />
+    <div className="space-y-8">
+      <Link
+        to="/projects"
+        className="inline-flex items-center gap-2 text-xs text-muted-foreground hover:text-foreground"
+      >
+        <ArrowLeft className="size-3.5" />
+        All projects
+      </Link>
+
+      <PageHeader
+        title={project.name}
+        description={`${platformLabel(project.platform)} · ${styleLabel(project.content_style)} · ${audienceSummary(project)}`}
+        actions={
+          <div className="flex w-full flex-wrap items-end gap-2 sm:w-auto">
+            <div className="min-w-36 flex-1 space-y-1.5 sm:flex-none">
+              <Label className="text-xs">Batch quantity</Label>
+              <Select value={quantityChoice} onValueChange={setQuantityChoice}>
+                <SelectTrigger className="w-full sm:w-36">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {QUANTITY_PRESETS.map((q) => (
+                    <SelectItem key={q} value={String(q)}>
+                      {q} variant{q === 1 ? "" : "s"}
+                    </SelectItem>
+                  ))}
+                  <SelectItem value="custom">Custom…</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            {quantityChoice === "custom" ? (
+              <div className="space-y-1.5">
+                <Label htmlFor="project-custom-qty" className="text-xs">
+                  How many? (1–{MAX_QUANTITY})
+                </Label>
+                <Input
+                  id="project-custom-qty"
+                  type="number"
+                  min={1}
+                  max={MAX_QUANTITY}
+                  value={customQuantity}
+                  onChange={(e) => setCustomQuantity(e.target.value)}
+                  className="w-28"
+                />
+              </div>
+            ) : null}
+            <Button
+              className="w-full sm:w-auto"
+              onClick={() => void generateBatch()}
+              disabled={running}
+            >
+              {running ? <Loader2 className="size-4 animate-spin" /> : <Play className="size-4" />}
+              Render {quantity} variant{quantity === 1 ? "" : "s"}
+            </Button>
+            {running ? (
+              <Button className="w-full sm:w-auto" variant="outline" onClick={cancelBatch}>
+                Cancel
+              </Button>
+            ) : null}
+          </div>
+        }
+      />
+
+      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+        <StatCard label="Hooks" value={(data?.hooks ?? []).length} icon={Sparkles} accent />
+        <StatCard label="Clips" value={(data?.media ?? []).length} icon={Play} />
+        <StatCard
+          label="Videos"
+          value={(data?.videos ?? []).filter((v) => v.playbackUrl).length}
+          icon={Trophy}
+        />
+        <div className="space-y-2">
+          <StatCard label="Queue" value={queuedCount} icon={Loader2} />
+          {queuedCount > 0 ? (
+            <Button
+              variant="outline"
+              size="sm"
+              className="w-full"
+              onClick={() => void clearQueue()}
+            >
+              Cancel {queuedCount} queued render{queuedCount === 1 ? "" : "s"}
+            </Button>
+          ) : null}
         </div>
       </div>
 
-      <div className="rounded-xl border border-border bg-card p-5 space-y-4">
-        <div className="flex items-center justify-between">
-          <div className="space-y-1">
-            <div className="flex items-center gap-2">
-              <Sparkles className="size-4 text-primary" />
-              <h2 className="text-base font-semibold">Clip DNA Engine</h2>
-              <Badge variant="secondary" className="text-[10px]">Multi-clip</Badge>
+      {requested > 0 ? (
+        <div className="panel px-5 py-4 text-xs">
+          <p className="font-medium">
+            {completed} completed / {requested} requested
+          </p>
+          {failed.length > 0 ? (
+            <p className="mt-1 text-destructive">
+              Failed jobs:{" "}
+              {failed.map((f) => `${f.jobId.slice(0, 8)} (${f.error ?? "unknown"})`).join(" · ")}
+            </p>
+          ) : null}
+          <div className="mt-3 space-y-2">
+            {live
+              .filter((l) => l.stage !== "completed" && l.stage !== "failed")
+              .map((l) => (
+                <div key={l.jobId} className="space-y-1">
+                  <div className="flex items-center justify-between gap-3">
+                    <span className="line-clamp-1 text-muted-foreground">{l.hookText}</span>
+                    <StatusPill status={STAGE_LABEL[l.stage]} />
+                  </div>
+                  <Progress value={l.progress} className="h-1.5" />
+                </div>
+              ))}
+          </div>
+        </div>
+      ) : null}
+
+      {mediaList.length > 0 ? (
+        <div className="panel space-y-3 px-5 py-4">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div>
+              <p className="text-sm font-medium">Clips used in this batch</p>
+              <p className="text-xs text-muted-foreground">
+                {activeClipIds.length > 1
+                  ? `The ${quantity} variants split evenly across ${activeClipIds.length} clips — any remainder goes to a random pick, and each clip keeps its own hook placement.`
+                  : "Pick 2 or more clips to spread the batch across them."}
+              </p>
             </div>
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() =>
+                setSelectedClipIds(
+                  activeClipIds.length === mediaList.length ? [] : mediaList.map((m) => m.id),
+                )
+              }
+            >
+              {activeClipIds.length === mediaList.length ? "Clear all" : "Select all"}
+            </Button>
+          </div>
+          <div className="max-h-48 space-y-1 overflow-y-auto">
+            {mediaList.map((m) => (
+              <label key={m.id} className="flex items-center gap-2 text-xs">
+                <Checkbox
+                  checked={activeClipIds.includes(m.id)}
+                  onCheckedChange={() => toggleClip(m.id)}
+                />
+                <span className="line-clamp-1">{m.filename}</span>
+                <span className="ml-auto shrink-0 text-muted-foreground">
+                  {Math.round(Number(m.duration ?? 0))}s
+                </span>
+              </label>
+            ))}
+          </div>
+        </div>
+      ) : null}
+
+      <div className="panel space-y-4 px-5 py-4">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <p className="text-sm font-medium">Clip DNA</p>
             <p className="text-xs text-muted-foreground">
-              Builds seamless edits from role-tagged clips (Start → Middle → End). Each clip follows its own start point and speeds set in the Media Library.
+              Combine Start / Middle / End tagged clips into one edit. Tag clips and set their
+              allowed speeds in the Media tab. The hook is burned onto the opening segment only.
             </p>
           </div>
         </div>
@@ -579,6 +768,31 @@ function ProjectDetailPage() {
               onChange={(e) => setTargetDuration(e.target.value)}
               className="w-24"
             />
+          </div>
+          <div className="space-y-1.5">
+            <Label className="text-xs">Start point in clips</Label>
+            <div className="flex items-center gap-2">
+              <Select value={dnaSeekMode} onValueChange={(v) => setDnaSeekMode(v as SeekMode)}>
+                <SelectTrigger className="w-56">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="random">Random (different each render)</SelectItem>
+                  <SelectItem value="manual">Choose a time</SelectItem>
+                  <SelectItem value="beginning">From the beginning (0:00)</SelectItem>
+                </SelectContent>
+              </Select>
+              {dnaSeekMode === "manual" && (
+                <Input
+                  type="number"
+                  min={0}
+                  step={0.5}
+                  value={dnaManualSeek}
+                  onChange={(e) => setDnaManualSeek(e.target.value)}
+                  className="w-20"
+                />
+              )}
+            </div>
           </div>
           <div className="space-y-1.5">
             <Label htmlFor="dna-quantity" className="text-xs">
@@ -634,206 +848,192 @@ function ProjectDetailPage() {
 
         {dnaPreview ? (
           <div className="space-y-3 rounded-lg border border-border p-4">
-            <div className="flex items-center justify-between">
-              <div>
-                <p className="text-sm font-medium">DNA Preview ready</p>
-                <p className="text-xs text-muted-foreground">
-                  Duration: {dnaPreview.plan.finalDuration}s · Cut:{" "}
-                  {dnaPreview.plan.segments
-                    .map((s) => `${dnaPreview.plan.clipById[s.media_asset_id]?.filename ?? "clip"} (${s.speed}x)`)
-                    .join(" → ")}
+            <div className="grid gap-4 sm:grid-cols-[200px_1fr]">
+              <div className="overflow-hidden rounded-lg border border-border bg-black">
+                {dnaPreview.item.url ? (
+                  <RenderPlayer src={dnaPreview.item.url} />
+                ) : (
+                  <div className="flex aspect-[9/16] items-center justify-center text-xs text-muted-foreground">
+                    No preview file
+                  </div>
+                )}
+              </div>
+              <div className="space-y-2 text-xs">
+                <p className="font-medium">
+                  {dnaPreview.plan.finalDuration.toFixed(2)}s total · hook on the{" "}
+                  {dnaPreview.plan.segments[0]!.role} segment ({dnaPreview.plan.placement})
                 </p>
+                {describePlan(dnaPreview.plan).map((s, i) => (
+                  <p key={i} className="text-muted-foreground">
+                    {i + 1}. <span className="uppercase">{s.role}</span> · {s.filename} · {s.cut} ·{" "}
+                    {s.speed} · {s.outputDuration}
+                  </p>
+                ))}
               </div>
-              <div className="flex gap-2">
-                <Button size="sm" variant="ghost" onClick={() => void discardDnaPreview()}>
-                  Discard
-                </Button>
-                <Button size="sm" onClick={() => void approveDnaPreviewAndRenderRemaining()}>
-                  Approve & render remaining {dnaCount - 1}
-                </Button>
-              </div>
+            </div>
+            <div className="flex flex-wrap gap-2">
+              <Button
+                className="w-full sm:w-auto"
+                onClick={() => void approveDna()}
+                disabled={dnaRunning}
+              >
+                {dnaRunning ? (
+                  <Loader2 className="size-4 animate-spin" />
+                ) : (
+                  <Play className="size-4" />
+                )}
+                Approve this style — render {Math.max(0, dnaCount - 1)} more
+              </Button>
+              <Button
+                className="w-full sm:w-auto"
+                variant="ghost"
+                onClick={() => void discardDnaPreview()}
+                disabled={dnaRunning}
+              >
+                Discard preview
+              </Button>
             </div>
           </div>
         ) : null}
       </div>
 
-      <div className="rounded-xl border border-border bg-card p-5 space-y-4">
-        <div className="space-y-1">
-          <div className="flex items-center gap-2">
-            <Layers className="size-4 text-primary" />
-            <h2 className="text-base font-semibold">Single-Clip Batch Generator</h2>
-          </div>
-          <p className="text-xs text-muted-foreground">
-            Takes one clip or splits variants across selected clips with hooks burned in.
-          </p>
-        </div>
-
-        <div className="flex flex-wrap items-end gap-3">
-          <div className="space-y-1.5">
-            <Label className="text-xs">Quantity</Label>
-            <div className="flex items-center gap-1.5">
-              {QUANTITY_PRESETS.map((p) => (
-                <Button
-                  key={p}
-                  type="button"
-                  size="sm"
-                  variant={quantityChoice === String(p) ? "default" : "outline"}
-                  className="h-8 px-2.5 text-xs"
-                  onClick={() => setQuantityChoice(String(p))}
-                >
-                  {p}
-                </Button>
-              ))}
-              <Button
-                type="button"
-                size="sm"
-                variant={quantityChoice === "custom" ? "default" : "outline"}
-                className="h-8 px-2.5 text-xs"
-                onClick={() => setQuantityChoice("custom")}
-              >
-                Custom
-              </Button>
-              {quantityChoice === "custom" && (
-                <Input
-                  type="number"
-                  min={1}
-                  max={MAX_QUANTITY}
-                  value={customQuantity}
-                  onChange={(e) => setCustomQuantity(e.target.value)}
-                  className="h-8 w-20 text-xs"
-                />
-              )}
-            </div>
-          </div>
-
-          <Button onClick={generateBatch} disabled={running}>
-            {running ? <Loader2 className="size-4 animate-spin" /> : <Sparkles className="size-4" />}
-            Generate {quantity} variants
-          </Button>
-          {running && (
-            <Button variant="outline" onClick={cancelBatch}>
-              Cancel
-            </Button>
-          )}
-        </div>
-
-        {live.length > 0 && running && (
-          <div className="space-y-2 rounded-lg border border-border p-3">
-            {live.map((item) => (
-              <div key={item.jobId} className="space-y-1">
-                <div className="flex items-center justify-between text-xs">
-                  <span className="truncate text-muted-foreground">{item.hookText}</span>
-                  <StatusPill status={STAGE_LABEL[item.stage]} />
-                </div>
-                <Progress value={item.progress} className="h-1.5" />
-              </div>
-            ))}
-          </div>
-        )}
-      </div>
-
-      <Tabs defaultValue="renders" className="space-y-4">
+      <Tabs defaultValue="hooks">
         <TabsList>
-          <TabsTrigger value="renders" className="flex items-center gap-2">
-            <Film className="size-4" />
-            Rendered Videos ({data?.videos?.length ?? 0})
-          </TabsTrigger>
-          <TabsTrigger value="hooks" className="flex items-center gap-2">
-            <FileText className="size-4" />
-            Hooks ({data?.hooks?.length ?? 0})
-          </TabsTrigger>
-          <TabsTrigger value="media" className="flex items-center gap-2">
-            <FolderOpen className="size-4" />
-            Media Clips ({data?.media?.length ?? 0})
-          </TabsTrigger>
+          <TabsTrigger value="hooks">Hooks</TabsTrigger>
+          <TabsTrigger value="media">Media</TabsTrigger>
+          <TabsTrigger value="renders">Renders</TabsTrigger>
         </TabsList>
 
-        <TabsContent value="renders" className="space-y-4">
-          {(data?.videos?.length ?? 0) === 0 ? (
-            <div className="flex h-48 flex-col items-center justify-center rounded-lg border border-dashed text-center text-muted-foreground">
-              <Film className="mb-2 size-8 text-muted-foreground/50" />
-              <p className="text-sm">No videos rendered yet.</p>
-              <p className="text-xs">Run a batch above to generate variations.</p>
-            </div>
-          ) : (
-            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4">
-              {data?.videos?.map((vid) => (
-                <div key={vid.id} className="overflow-hidden rounded-lg border border-border bg-card">
-                  <div className="aspect-[9/16] w-full bg-black">
-                    <RenderPlayer url={vid.playbackUrl} posterUrl={vid.posterUrl} />
-                  </div>
-                  <div className="space-y-2 p-3">
-                    <p className="line-clamp-2 text-xs font-medium">{vid.hook_text}</p>
-                    <div className="flex items-center justify-between text-[11px] text-muted-foreground">
-                      <span>{vid.duration}s</span>
-                      <span>{vid.media_assets?.filename ?? "Clip"}</span>
+        <TabsContent value="hooks" className="pt-6">
+          <HookLibraryPanel
+            projectId={projectId}
+            generatorContext={{
+              product: data?.product?.name ?? project.name,
+              productUrl: data?.product?.url ?? null,
+              audience: audienceSummary(project),
+              platform: project.platform,
+              contentStyle: project.content_style,
+            }}
+          />
+        </TabsContent>
+
+        <TabsContent value="media" className="pt-6">
+          <MediaLibraryPanel projectId={projectId} />
+        </TabsContent>
+
+        <TabsContent value="renders" className="space-y-6 pt-6">
+          <div className="panel divide-y divide-border overflow-hidden">
+            {activeJobs.length + finishedJobs.length === 0 ? (
+              <p className="px-5 py-8 text-center text-xs text-muted-foreground">
+                No render jobs yet.
+              </p>
+            ) : (
+              <>
+                {[...activeJobs, ...(showJobHistory ? finishedJobs : finishedJobs.slice(0, 1))].map(
+                  (j) => (
+                    <div key={j.id} className="px-5 py-4">
+                      <div className="flex items-center justify-between gap-3">
+                        <span className="font-mono text-xs text-muted-foreground">
+                          {j.id.slice(0, 8)}
+                        </span>
+                        <StatusPill status={j.status} />
+                      </div>
+                      <Progress value={j.progress} className="mt-3 h-1.5" />
+                      {j.error_message ? (
+                        <p className="mt-2 text-[11px] text-destructive">{j.error_message}</p>
+                      ) : null}
                     </div>
-                    <div className="flex items-center gap-1.5 pt-1">
+                  ),
+                )}
+                {finishedJobs.length > 1 ? (
+                  <button
+                    type="button"
+                    onClick={() => setShowJobHistory((v) => !v)}
+                    className="flex w-full items-center justify-center gap-1.5 px-5 py-3 text-xs text-muted-foreground hover:text-foreground"
+                  >
+                    {showJobHistory ? "Hide history" : `History — ${finishedJobs.length - 1} more`}
+                    <ChevronDown
+                      className={`size-3.5 transition-transform ${showJobHistory ? "rotate-180" : ""}`}
+                    />
+                  </button>
+                ) : null}
+              </>
+            )}
+          </div>
+
+          <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
+            {data?.videos.map((v) => (
+              <div key={v.id} className="panel space-y-3 p-4">
+                <div className="overflow-hidden rounded-lg border border-border bg-black">
+                  {v.playbackUrl ? (
+                    <RenderPlayer src={v.playbackUrl} poster={v.posterUrl} />
+                  ) : (
+                    <div className="flex aspect-[9/16] items-center justify-center px-4 text-center text-xs text-muted-foreground">
+                      Output file missing — re-run this render.
+                    </div>
+                  )}
+                </div>
+
+                <p className="line-clamp-2 text-sm font-medium">{v.hook_text ?? "Untitled"}</p>
+                <p className="text-[11px] leading-relaxed text-muted-foreground">
+                  {(v.media_assets as { filename?: string } | null)?.filename ?? "Source clip"} ·{" "}
+                  {Math.round(Number(v.duration ?? CLIP_SECONDS))}s · {fmtDate(v.created_at)}
+                  {v.is_winner ? " · Winner" : ""}
+                </p>
+                <div className="flex items-center justify-between gap-2">
+                  <StatusPill status={v.playbackUrl ? "completed" : "failed"} />
+                  <div className="flex items-center gap-2">
+                    {v.playbackUrl ? (
                       <Button
                         size="sm"
                         variant="secondary"
-                        className="h-7 flex-1 text-xs"
                         onClick={() =>
-                          setScheduleItem({
-                            id: vid.id,
-                            url: vid.playbackUrl,
-                            hook: vid.hook_text ?? "",
-                          })
+                          void downloadRender(
+                            v.playbackUrl!,
+                            renderFilename(v.output_url, `hook-variant-${v.id.slice(0, 6)}`),
+                          ).catch((e) => toast.error((e as Error).message))
                         }
                       >
-                        <Calendar className="mr-1 size-3" />
+                        <Download className="size-3.5" />
+                        Download
+                      </Button>
+                    ) : null}
+                    {v.playbackUrl ? (
+                      <Button
+                        size="sm"
+                        onClick={() =>
+                          setScheduleTarget({ id: v.id, hookText: v.hook_text ?? null })
+                        }
+                      >
+                        <CalendarClock className="size-3.5" />
                         Schedule
                       </Button>
-                      <DeleteRenderButton videoId={vid.id} projectId={projectId} />
-                    </div>
+                    ) : null}
+                    <DeleteRenderButton
+                      onConfirm={async () => {
+                        try {
+                          await deleteRender(v);
+                          await qc.invalidateQueries({ queryKey: ["project", projectId] });
+                          await qc.invalidateQueries({ queryKey: ["studio-results"] });
+                          toast.success("Render deleted");
+                        } catch (e) {
+                          toast.error((e as Error).message);
+                        }
+                      }}
+                    />
                   </div>
                 </div>
-              ))}
-            </div>
-          )}
-        </TabsContent>
-
-        <TabsContent value="hooks">
-          <HookLibraryPanel projectId={projectId} />
-        </TabsContent>
-
-        <TabsContent value="media">
-          <div className="space-y-4">
-            <div className="flex items-center justify-between text-xs text-muted-foreground">
-              <span>Select clips participating in renders:</span>
-              <div className="flex gap-2">
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  className="h-6 text-xs"
-                  onClick={() => setSelectedClipIds(mediaList.map((m) => m.id))}
-                >
-                  Select all
-                </Button>
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  className="h-6 text-xs"
-                  onClick={() => setSelectedClipIds([])}
-                >
-                  Clear
-                </Button>
               </div>
-            </div>
-            <MediaLibraryPanel projectId={projectId} />
+            ))}
           </div>
         </TabsContent>
       </Tabs>
-
-      {scheduleItem && (
-        <ScheduleTikTokDialog
-          open={Boolean(scheduleItem)}
-          onOpenChange={(o) => !o && setScheduleItem(null)}
-          videoUrl={scheduleItem.url}
-          defaultCaption={scheduleItem.hook}
-          generatedVideoId={scheduleItem.id}
-        />
-      )}
+      <ScheduleTikTokDialog
+        videoId={scheduleTarget?.id ?? ""}
+        hookText={scheduleTarget?.hookText ?? null}
+        open={Boolean(scheduleTarget)}
+        onOpenChange={(o) => !o && setScheduleTarget(null)}
+      />
     </div>
   );
 }
