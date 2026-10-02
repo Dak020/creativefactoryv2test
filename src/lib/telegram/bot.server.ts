@@ -51,7 +51,11 @@ export async function sendVideoWithButtons(
 ) {
   const form = new FormData();
   form.append("chat_id", String(chatId));
+  // Explicitly specify 1080x1920 (9:16) and streaming for native vertical playback
   form.append("video", new Blob([videoBuffer], { type: "video/mp4" }), "preview.mp4");
+  form.append("width", "1080");
+  form.append("height", "1920");
+  form.append("supports_streaming", "true");
   form.append("caption", caption);
   form.append("parse_mode", "HTML");
   if (replyMarkup) {
