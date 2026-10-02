@@ -47,7 +47,6 @@ import {
 } from "@/lib/render/pipeline";
 import { Checkbox } from "@/components/ui/checkbox";
 import { checkRoles } from "@/lib/dna/solver";
-import type { SeekMode } from "@/lib/render/browser-render";
 import {
   planDna,
   runDnaVariant,
