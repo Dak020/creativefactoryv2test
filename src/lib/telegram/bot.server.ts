@@ -36,3 +36,34 @@ export async function tg(method: string, body: Record<string, unknown>) {
 export function sendText(chatId: number, text: string) {
   return tg("sendMessage", { chat_id: chatId, text, parse_mode: "HTML", disable_web_page_preview: true });
 }
+
+export async function sendVideoWithButtons(
+  chatId: number,
+  videoBuffer: Buffer,
+  caption: string,
+  replyMarkup?: unknown
+) {
+  const form = new FormData();
+  form.append("chat_id", String(chatId));
+  form.append("video", new Blob([videoBuffer], { type: "video/mp4" }), "preview.mp4");
+  form.append("caption", caption);
+  form.append("parse_mode", "HTML");
+  if (replyMarkup) {
+    form.append("reply_markup", JSON.stringify(replyMarkup));
+  }
+
+  const res = await fetch(`https://api.telegram.org/bot${botToken()}/sendVideo`, {
+    method: "POST",
+    body: form,
+  });
+
+  const json = (await res.json().catch(() => ({}))) as { ok?: boolean; description?: string };
+  if (!res.ok || !json.ok) {
+    throw new Error(`sendVideo failed: ${json.description ?? res.status}`);
+  }
+  return json;
+}
+
+export function answerCallback(callbackQueryId: string, text?: string) {
+  return tg("answerCallbackQuery", { callback_query_id: callbackQueryId, text });
+}
