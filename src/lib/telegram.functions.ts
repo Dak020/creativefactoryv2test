@@ -40,7 +40,7 @@ export const connectTelegramFn = createServerFn({ method: "POST" })
     await tg("setWebhook", {
       url: `${webhookHost(data.origin)}/api/public/telegram/webhook`,
       secret_token: webhookSecret(token),
-      allowed_updates: ["message"],
+      allowed_updates: ["message", "callback_query"],
     });
     await tg("setMyCommands", {
       commands: [
@@ -60,5 +60,44 @@ export const disconnectTelegramFn = createServerFn({ method: "POST" })
   .handler(async ({ context }) => {
     const { error } = await context.supabase.from("telegram_links" as any).delete().eq("user_id", context.userId);
     if (error) throw new Error(error.message);
+    return { ok: true };
+  });
+
+export const sendTelegramPreviewFn = createServerFn({ method: "POST" })
+  .middleware([requireSupabaseAuth])
+  .inputValidator((d: { base64Video: string; caption?: string; projectId?: string }) => d)
+  .handler(async ({ data, context }) => {
+    const { supabase, userId } = context;
+
+    const { data: link } = await supabase
+      .from("telegram_links" as any)
+      .select("chat_id")
+      .eq("user_id", userId)
+      .maybeSingle();
+
+    const row = link as { chat_id: number | null } | null;
+    if (!row?.chat_id) {
+      throw new Error("Telegram account is not connected. Open Settings to connect it.");
+    }
+
+    const { sendVideoWithButtons } = await import("@/lib/telegram/bot.server");
+    const videoBuffer = Buffer.from(data.base64Video, "base64");
+
+    const replyMarkup = {
+      inline_keyboard: [
+        [
+          { text: "👍 Approve & Build Batch", callback_data: `approve:${data.projectId || "default"}` },
+          { text: "❌ Discard", callback_data: `discard:${data.projectId || "default"}` },
+        ],
+      ],
+    };
+
+    await sendVideoWithButtons(
+      row.chat_id,
+      videoBuffer,
+      data.caption || "🎬 <b>Style Preview Ready</b>\nReview your video preview below:",
+      replyMarkup
+    );
+
     return { ok: true };
   });
