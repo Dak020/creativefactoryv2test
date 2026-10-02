@@ -178,7 +178,7 @@ function ProjectWorkspace() {
         supabase.from("hooks").select("id, text").eq("project_id", projectId),
         supabase
           .from("media_assets")
-          .select("id, filename, duration, storage_path, hook_placement, dna_role, allowed_speeds")
+          .select("id, filename, duration, storage_path, hook_placement, dna_role, allowed_speeds, seek_mode, seek_seconds")
           .eq("project_id", projectId)
           .order("created_at", { ascending: false }),
       ]);
@@ -238,6 +238,10 @@ function ProjectWorkspace() {
               ? m.allowed_speeds.map(Number)
               : [1.0, 1.5, 1.7, 2.0],
           hookPlacement: m.hook_placement,
+          seekMode: (["random", "beginning", "manual"].includes((m as any).seek_mode)
+            ? (m as any).seek_mode
+            : undefined) as "random" | "beginning" | "manual" | undefined,
+          seekSeconds: Number((m as any).seek_seconds ?? 0),
           filename: m.filename,
           storage_path: m.storage_path,
         })),
