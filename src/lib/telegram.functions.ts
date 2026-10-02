@@ -4,7 +4,6 @@ import { requireSupabaseAuth } from "@/integrations/supabase/auth-middleware";
 const PROJECT_ID = "81a2e896-1052-4241-8514-4dd7922129c6";
 
 function webhookHost(origin: string) {
-  // Preview links go through a sign-in wall; Telegram needs the public dev host.
   if (origin.includes("id-preview--") || origin.includes("localhost")) {
     return `https://project--${PROJECT_ID}-dev.lovable.app`;
   }
@@ -42,15 +41,21 @@ export const connectTelegramFn = createServerFn({ method: "POST" })
       secret_token: webhookSecret(token),
       allowed_updates: ["message", "callback_query"],
     });
+
+    // Register all slash commands with Telegram
     await tg("setMyCommands", {
       commands: [
         { command: "status", description: "Workspace overview" },
+        { command: "projects", description: "View your projects" },
+        { command: "addhook", description: "Select project and add a hook" },
         { command: "clips", description: "Latest clips" },
         { command: "trends", description: "Top trending sounds" },
-        { command: "schedule", description: "Upcoming posts" },
-        { command: "help", description: "All commands" },
+        { command: "schedule", description: "Upcoming scheduled posts" },
+        { command: "help", description: "Show available commands" },
       ],
-    }).catch(() => {});
+    }).catch((err) => {
+      console.error("setMyCommands error:", err);
+    });
 
     return { url: `https://t.me/${BOT_USERNAME}?start=${code}` };
   });
