@@ -17,7 +17,8 @@ const HELP = [
 ].join("\n");
 
 function db() {
-  return createClient(process.env["SUPABASE_URL"]!, process.env["SUPABASE_PUBLISHABLE_KEY"]!, {
+  const key = process.env["SUPABASE_SERVICE_ROLE_KEY"] || process.env["SUPABASE_PUBLISHABLE_KEY"]!;
+  return createClient(process.env["SUPABASE_URL"]!, key, {
     auth: { persistSession: false, autoRefreshToken: false },
   });
 }
@@ -71,10 +72,11 @@ export const Route = createFileRoute("/api/public/telegram/webhook")({
           const chatId = cb.message?.chat?.id;
 
           if (data.startsWith("select_project_hook:")) {
-            const [_, projectId, projectName] = data.split(":");
+            const parts = data.split(":");
+            const projectId = parts[1];
+            const projectName = parts[2];
             await answerCallback(callbackId);
 
-            // Prompt user with ForceReply to capture their hook text
             await sendText(
               chatId,
               `🎯 Selected: <b>${esc(projectName || "Project")}</b>\n(ID: <code>${projectId}</code>)\n\nReply directly to this message with your hook text:`,
@@ -110,13 +112,12 @@ export const Route = createFileRoute("/api/public/telegram/webhook")({
           return Response.json({ ok: true });
         }
 
-        // Check if this is a reply to the "Reply directly to this message with your hook text" prompt
+        // Check if this is a reply to the hook prompt
         if (msg.reply_to_message?.text && msg.reply_to_message.text.includes("Reply directly to this message with your hook text")) {
           const idMatch = msg.reply_to_message.text.match(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i);
           if (idMatch) {
             const projectId = idMatch[0];
 
-            // Lookup the user linked to this chat
             const { data: link } = await db()
               .from("telegram_links")
               .select("user_id")
@@ -136,7 +137,7 @@ export const Route = createFileRoute("/api/public/telegram/webhook")({
               if (insertErr) {
                 await sendText(chatId, `❌ Failed to save hook: ${esc(insertErr.message)}`);
               } else {
-                await sendText(chatId, `✅ <b>Hook added successfully!</b>\n\n"<i>${esc(text)}</i>"\n\nIt is now saved in your project's hook library.`);
+                await sendText(chatId, `✅ <b>Hook added!</b>\n\n"<i>${esc(text)}</i>"\n\nIt is now saved in your project's hook library.`);
               }
               return Response.json({ ok: true });
             }
@@ -160,8 +161,8 @@ export const Route = createFileRoute("/api/public/telegram/webhook")({
             return Response.json({ ok: true });
           }
 
-          // Handle /projects command
-          if (cmd === "projects") {
+          // Handle /projects
+          if (cmd === "projects" || cmd === "project") {
             const { data: link } = await db().from("telegram_links").select("user_id").eq("chat_id", chatId).maybeSingle();
             if (!link?.user_id) {
               await sendText(chatId, "Please connect your Telegram account first in Settings.");
@@ -177,8 +178,8 @@ export const Route = createFileRoute("/api/public/telegram/webhook")({
             return Response.json({ ok: true });
           }
 
-          // Handle /addhook command: show project picker buttons
-          if (cmd === "addhook") {
+          // Handle /addhook
+          if (cmd === "addhook" || cmd === "addhooks") {
             const { data: link } = await db().from("telegram_links").select("user_id").eq("chat_id", chatId).maybeSingle();
             if (!link?.user_id) {
               await sendText(chatId, "Please connect your Telegram account first in Settings.");
@@ -190,7 +191,6 @@ export const Route = createFileRoute("/api/public/telegram/webhook")({
               return Response.json({ ok: true });
             }
 
-            // Create inline keyboard with a button for each project
             const inlineKeyboard = projs.slice(0, 8).map((p) => [
               {
                 text: `📁 ${p.name.slice(0, 25)}`,
@@ -200,7 +200,7 @@ export const Route = createFileRoute("/api/public/telegram/webhook")({
 
             await sendText(
               chatId,
-              "🎯 <b>Select the project</b> you want to add a hook to:",
+              "🎯 <b>Select the project</b> to add a hook to:",
               { inline_keyboard: inlineKeyboard }
             );
             return Response.json({ ok: true });
