@@ -2,8 +2,9 @@ import { useEffect, useRef } from "react";
 import { toast } from "sonner";
 import { supabase } from "@/integrations/supabase/client";
 import { renderVariant, type HookPlacement } from "@/lib/render/browser-render";
+import { renderSequence, type SequenceSegment } from "@/lib/render/sequence-render";
 import { RENDER_BUCKET, OUT_W, OUT_H } from "@/lib/render/pipeline";
-import { sendTelegramPreviewFn } from "@/lib/telegram.functions";
+import { sendTelegramNotificationFn, sendTelegramPreviewFn } from "@/lib/telegram.functions";
 
 function blobToBase64(blob: Blob): Promise<string> {
   return new Promise((resolve, reject) => {
@@ -79,31 +80,17 @@ export function RenderWorker() {
           throw new Error(recipeErr?.message || "Video recipe not found");
         }
 
-        // 4. Fetch media clip asset
-        if (!recipe.media_asset_id) {
-          throw new Error("Recipe is missing media_asset_id");
-        }
+        const isDna = recipe.background_color?.includes("dna");
+        const targetDuration = recipe.duration && recipe.duration > 0 && recipe.duration <= 30 ? recipe.duration : 8;
 
-        const { data: asset, error: assetErr } = await supabase
-          .from("media_assets")
-          .select("id, storage_path, filename")
-          .eq("id", recipe.media_asset_id)
-          .single();
+        // Notify Telegram that rendering has actively started
+        sendTelegramNotificationFn({
+          data: {
+            message: `⚙️ <b>Rendering started in browser!</b>\n\n• <b>Mode:</b> ${isDna ? "Clip DNA" : "Single Render"}\n• <b>Duration:</b> ${targetDuration}s\n• <b>Hook:</b> "${recipe.overlay_text}"`,
+          },
+        }).catch(() => {});
 
-        if (assetErr || !asset) {
-          throw new Error(assetErr?.message || "Media asset clip not found");
-        }
-
-        // 5. Create signed URL for media clip
-        const { data: signData, error: signErr } = await supabase.storage
-          .from("media")
-          .createSignedUrl(asset.storage_path, 3600);
-
-        if (signErr || !signData?.signedUrl) {
-          throw new Error(signErr?.message || "Could not generate signed URL for media clip");
-        }
-
-        // Map overlay position to browser-render HookPlacement ('top' | 'middle' | 'bottom')
+        // Map overlay position
         let placement: HookPlacement = "top";
         if (recipe.overlay_position === "center" || recipe.overlay_position === "middle") {
           placement = "middle";
@@ -111,26 +98,96 @@ export function RenderWorker() {
           placement = "bottom";
         }
 
-        // 6. Execute browser-side canvas rendering
-        const { blob, extension, mimeType, thumbnail } = await renderVariant({
-          sourceUrl: signData.signedUrl,
-          startSeconds: 0,
-          durationSeconds: recipe.duration || 8,
-          width: recipe.width || OUT_W,
-          height: recipe.height || OUT_H,
-          text: recipe.overlay_text || "",
-          placement,
-          fontSize: recipe.font_size || 48,
-          withAudio: true,
-          onProgress: (pct) => {
-            const p = Math.max(5, Math.min(85, Math.round(pct * 0.85)));
-            supabase
-              .from("render_jobs")
-              .update({ progress: p })
-              .eq("id", job.id)
-              .then(() => {});
-          },
-        });
+        let renderResult: { blob: Blob; extension: string; mimeType: string; thumbnail?: Blob | null };
+
+        if (isDna) {
+          // --- CLIP DNA MULTI-CLIP RENDERING ---
+          const { data: clips } = await supabase
+            .from("media_assets")
+            .select("id, storage_path, filename")
+            .eq("user_id", job.user_id)
+            .order("created_at", { ascending: false })
+            .limit(2);
+
+          if (!clips || clips.length === 0) {
+            throw new Error("No media clips available for DNA sequence");
+          }
+
+          // Generate signed URLs for the clips
+          const segments: SequenceSegment[] = [];
+          const segDuration = targetDuration / clips.length;
+
+          for (const clip of clips) {
+            const { data: sData } = await supabase.storage.from("media").createSignedUrl(clip.storage_path, 3600);
+            if (sData?.signedUrl) {
+              segments.push({
+                url: sData.signedUrl,
+                sourceIn: 0,
+                sourceOut: segDuration,
+                speed: 1,
+                outputDuration: segDuration,
+              });
+            }
+          }
+
+          if (segments.length === 0) {
+            throw new Error("Could not resolve media clips for DNA rendering");
+          }
+
+          renderResult = await renderSequence({
+            segments,
+            width: OUT_W,
+            height: OUT_H,
+            text: recipe.overlay_text || "",
+            placement,
+            withAudio: true,
+            onProgress: (pct) => {
+              const p = Math.max(5, Math.min(85, Math.round(pct * 0.85)));
+              supabase.from("render_jobs").update({ progress: p }).eq("id", job.id).then(() => {});
+            },
+          });
+        } else {
+          // --- SINGLE CLIP RENDERING ---
+          if (!recipe.media_asset_id) {
+            throw new Error("Recipe is missing media_asset_id");
+          }
+
+          const { data: asset, error: assetErr } = await supabase
+            .from("media_assets")
+            .select("id, storage_path, filename")
+            .eq("id", recipe.media_asset_id)
+            .single();
+
+          if (assetErr || !asset) {
+            throw new Error(assetErr?.message || "Media asset clip not found");
+          }
+
+          const { data: signData, error: signErr } = await supabase.storage
+            .from("media")
+            .createSignedUrl(asset.storage_path, 3600);
+
+          if (signErr || !signData?.signedUrl) {
+            throw new Error(signErr?.message || "Could not generate signed URL for media clip");
+          }
+
+          renderResult = await renderVariant({
+            sourceUrl: signData.signedUrl,
+            startSeconds: 0,
+            durationSeconds: targetDuration,
+            width: OUT_W,
+            height: OUT_H,
+            text: recipe.overlay_text || "",
+            placement,
+            fontSize: recipe.font_size || 48,
+            withAudio: true,
+            onProgress: (pct) => {
+              const p = Math.max(5, Math.min(85, Math.round(pct * 0.85)));
+              supabase.from("render_jobs").update({ progress: p }).eq("id", job.id).then(() => {});
+            },
+          });
+        }
+
+        const { blob, extension, mimeType, thumbnail } = renderResult;
 
         if (!blob || blob.size === 0) {
           throw new Error("Renderer produced an empty video blob");
@@ -138,7 +195,7 @@ export function RenderWorker() {
 
         toast.loading("Uploading rendered video...", { id: toastId });
 
-        // 7. Upload rendered video to storage
+        // 4. Upload rendered video to storage
         const outPath = `${job.user_id}/${job.id}.${extension}`;
         const { error: uploadErr } = await supabase.storage
           .from(RENDER_BUCKET)
@@ -158,50 +215,72 @@ export function RenderWorker() {
           if (thumbErr) thumbPath = null;
         }
 
-        // 8. Insert record in generated_videos
-        await supabase.from("generated_videos").insert({
-          user_id: job.user_id,
-          project_id: job.project_id,
-          render_job_id: job.id,
-          recipe_id: recipe.id,
-          hook_id: recipe.hook_id,
-          media_asset_id: recipe.media_asset_id,
-          hook_text: recipe.overlay_text,
-          output_url: outPath,
-          thumbnail_url: thumbPath,
-          duration: recipe.duration || 8,
-          status: "completed",
-        });
+        // 5. Save & Approval Handling:
+        if (isDna) {
+          // --- DNA Render: Keep as preview for Telegram approval ---
+          await supabase
+            .from("render_jobs")
+            .update({
+              status: "completed",
+              progress: 100,
+              output_url: outPath,
+              completed_at: new Date().toISOString(),
+              error_message: null,
+            })
+            .eq("id", job.id);
 
-        // 9. Mark render_job as completed
-        await supabase
-          .from("render_jobs")
-          .update({
-            status: "completed",
-            progress: 100,
+          toast.success("DNA Preview ready! Sending to Telegram for approval...", { id: toastId });
+
+          // Send 9:16 preview with inline Approve & Discard buttons
+          try {
+            const base64Video = await blobToBase64(blob);
+            await sendTelegramPreviewFn({
+              data: {
+                base64Video,
+                caption: `🎬 <b>Clip DNA Preview (9:16)</b>\n\n• <b>Hook:</b> "${recipe.overlay_text}"\n• <b>Duration:</b> ${targetDuration}s\n\nApprove below to save to your project library:`,
+                projectId: job.project_id,
+                jobId: job.id,
+              },
+            });
+            toast.success("Preview delivered to Telegram!", { id: toastId });
+          } catch (tgErr) {
+            console.warn("Telegram preview sending error:", tgErr);
+          }
+        } else {
+          // --- Single Render: Auto-save directly without requiring approval ---
+          await supabase.from("generated_videos").insert({
+            user_id: job.user_id,
+            project_id: job.project_id,
+            render_job_id: job.id,
+            recipe_id: recipe.id,
+            hook_id: recipe.hook_id,
+            media_asset_id: recipe.media_asset_id,
+            hook_text: recipe.overlay_text,
             output_url: outPath,
-            completed_at: new Date().toISOString(),
-            error_message: null,
-          })
-          .eq("id", job.id);
-
-        toast.success("Render completed successfully!", { id: toastId });
-
-        // 10. Send Telegram preview
-        try {
-          toast.loading("Sending preview to Telegram...", { id: toastId });
-          const base64Video = await blobToBase64(blob);
-          await sendTelegramPreviewFn({
-            data: {
-              base64Video,
-              caption: `🎬 <b>Render Ready!</b>\n\n• <b>Hook:</b> "${recipe.overlay_text}"\n• <b>Duration:</b> ${recipe.duration || 8}s`,
-              projectId: job.project_id,
-            },
+            thumbnail_url: thumbPath,
+            duration: targetDuration,
+            status: "completed",
           });
-          toast.success("Preview delivered to Telegram bot!", { id: toastId });
-        } catch (tgErr) {
-          console.warn("Telegram preview delivery skipped or failed:", tgErr);
-          toast.dismiss(toastId);
+
+          await supabase
+            .from("render_jobs")
+            .update({
+              status: "completed",
+              progress: 100,
+              output_url: outPath,
+              completed_at: new Date().toISOString(),
+              error_message: null,
+            })
+            .eq("id", job.id);
+
+          toast.success("Render completed and saved to library!", { id: toastId });
+
+          // Notify Telegram of auto-save completion (no preview buttons required)
+          sendTelegramNotificationFn({
+            data: {
+              message: `✅ <b>Single Render Complete!</b>\n\n• <b>Hook:</b> "${recipe.overlay_text}"\n• <b>Duration:</b> ${targetDuration}s\n\nAuto-saved to your project library and ready to schedule.`,
+            },
+          }).catch(() => {});
         }
       } catch (err) {
         const errorMsg = (err as Error).message || "Render failed";
@@ -217,6 +296,12 @@ export function RenderWorker() {
             completed_at: new Date().toISOString(),
           })
           .eq("id", jobId);
+
+        sendTelegramNotificationFn({
+          data: {
+            message: `❌ <b>Render failed:</b> ${errorMsg}`,
+          },
+        }).catch(() => {});
       } finally {
         isProcessingRef.current = false;
         checkPendingJobs();
@@ -244,10 +329,8 @@ export function RenderWorker() {
       }
     }
 
-    // Check for pending jobs on initial mount
     checkPendingJobs();
 
-    // Subscribe to Realtime inserts & updates on render_jobs
     const channel = supabase
       .channel("render_jobs_worker")
       .on(
@@ -266,7 +349,6 @@ export function RenderWorker() {
       )
       .subscribe();
 
-    // Polling fallback every 15s in case realtime drops
     const interval = setInterval(checkPendingJobs, 15000);
 
     return () => {
