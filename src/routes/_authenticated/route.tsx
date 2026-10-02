@@ -5,6 +5,7 @@ import { supabase } from "@/integrations/supabase/client";
 import { AppSidebar } from "@/components/AppSidebar";
 import { Sheet, SheetContent, SheetTrigger } from "@/components/ui/sheet";
 import { Button } from "@/components/ui/button";
+import { RenderWorker } from "@/components/RenderWorker";
 
 export const Route = createFileRoute("/_authenticated")({
   ssr: false,
@@ -22,6 +23,7 @@ function AppLayout() {
 
   return (
     <div className="flex h-screen w-full overflow-x-hidden bg-background">
+      <RenderWorker />
       <div className="hidden lg:block">
         <AppSidebar />
       </div>
