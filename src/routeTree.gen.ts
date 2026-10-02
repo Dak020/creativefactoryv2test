@@ -31,6 +31,7 @@ import { Route as AuthenticatedProjectsIndexRouteImport } from './routes/_authen
 import { Route as AuthenticatedProjectsProjectIdRouteImport } from './routes/_authenticated/projects.$projectId'
 import { Route as OauthTiktokCallbackRouteImport } from './routes/oauth.tiktok.callback'
 import { Route as OauthUploadPostReturnRouteImport } from './routes/oauth.upload-post.return'
+import { Route as ApiPublicTelegramWebhookRouteImport } from './routes/api/public/telegram/webhook'
 
 const IndexRoute = IndexRouteImport.update({
   id: '/',
@@ -144,6 +145,12 @@ const OauthUploadPostReturnRoute = OauthUploadPostReturnRouteImport.update({
   path: '/oauth/upload-post/return',
   getParentRoute: () => rootRouteImport,
 } as any)
+const ApiPublicTelegramWebhookRoute =
+  ApiPublicTelegramWebhookRouteImport.update({
+    id: '/api/public/telegram/webhook',
+    path: '/api/public/telegram/webhook',
+    getParentRoute: () => rootRouteImport,
+  } as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
@@ -167,6 +174,7 @@ export interface FileRoutesByFullPath {
   '/oauth/tiktok/callback': typeof OauthTiktokCallbackRoute
   '/oauth/upload-post/return': typeof OauthUploadPostReturnRoute
   '/projects/': typeof AuthenticatedProjectsIndexRoute
+  '/api/public/telegram/webhook': typeof ApiPublicTelegramWebhookRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
@@ -189,6 +197,7 @@ export interface FileRoutesByTo {
   '/oauth/tiktok/callback': typeof OauthTiktokCallbackRoute
   '/oauth/upload-post/return': typeof OauthUploadPostReturnRoute
   '/projects': typeof AuthenticatedProjectsIndexRoute
+  '/api/public/telegram/webhook': typeof ApiPublicTelegramWebhookRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
@@ -214,6 +223,7 @@ export interface FileRoutesById {
   '/oauth/tiktok/callback': typeof OauthTiktokCallbackRoute
   '/oauth/upload-post/return': typeof OauthUploadPostReturnRoute
   '/_authenticated/projects/': typeof AuthenticatedProjectsIndexRoute
+  '/api/public/telegram/webhook': typeof ApiPublicTelegramWebhookRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
@@ -239,6 +249,7 @@ export interface FileRouteTypes {
     | '/oauth/tiktok/callback'
     | '/oauth/upload-post/return'
     | '/projects/'
+    | '/api/public/telegram/webhook'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
@@ -261,6 +272,7 @@ export interface FileRouteTypes {
     | '/oauth/tiktok/callback'
     | '/oauth/upload-post/return'
     | '/projects'
+    | '/api/public/telegram/webhook'
   id:
     | '__root__'
     | '/'
@@ -285,6 +297,7 @@ export interface FileRouteTypes {
     | '/oauth/tiktok/callback'
     | '/oauth/upload-post/return'
     | '/_authenticated/projects/'
+    | '/api/public/telegram/webhook'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
@@ -296,6 +309,7 @@ export interface RootRouteChildren {
   TermsRoute: typeof TermsRoute
   OauthTiktokCallbackRoute: typeof OauthTiktokCallbackRoute
   OauthUploadPostReturnRoute: typeof OauthUploadPostReturnRoute
+  ApiPublicTelegramWebhookRoute: typeof ApiPublicTelegramWebhookRoute
 }
 
 declare module '@tanstack/react-router' {
@@ -454,6 +468,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof OauthUploadPostReturnRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/api/public/telegram/webhook': {
+      id: '/api/public/telegram/webhook'
+      path: '/api/public/telegram/webhook'
+      fullPath: '/api/public/telegram/webhook'
+      preLoaderRoute: typeof ApiPublicTelegramWebhookRouteImport
+      parentRoute: typeof rootRouteImport
+    }
   }
 }
 
@@ -511,6 +532,7 @@ const rootRouteChildren: RootRouteChildren = {
   TermsRoute: TermsRoute,
   OauthTiktokCallbackRoute: OauthTiktokCallbackRoute,
   OauthUploadPostReturnRoute: OauthUploadPostReturnRoute,
+  ApiPublicTelegramWebhookRoute: ApiPublicTelegramWebhookRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)

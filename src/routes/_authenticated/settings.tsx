@@ -9,6 +9,7 @@ import { VIDEO_DEFAULTS } from "@/lib/constants";
 import { formatBytes } from "@/lib/db";
 import { AiProviderSettings } from "@/components/AiProviderSettings";
 import { PasswordSettings } from "@/components/PasswordSettings";
+import { TelegramSettings } from "@/components/TelegramSettings";
 
 export const Route = createFileRoute("/_authenticated/settings")({
   head: () => ({
@@ -174,6 +175,8 @@ function SettingsPage() {
             ))}
           </dl>
         </section>
+
+        <TelegramSettings />
 
         <PasswordSettings />
 
