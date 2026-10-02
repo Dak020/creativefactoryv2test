@@ -1,7 +1,7 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { createClient } from "@supabase/supabase-js";
 import { timingSafeEqual } from "crypto";
-import { botKey, botToken, sendText, webhookSecret } from "@/lib/telegram/bot.server";
+import { answerCallback, botKey, botToken, sendText, webhookSecret } from "@/lib/telegram/bot.server";
 
 const esc = (s: unknown) => String(s ?? "").replace(/[<>&]/g, (c) => ({ "<": "&lt;", ">": "&gt;", "&": "&amp;" })[c]!);
 
@@ -59,6 +59,28 @@ export const Route = createFileRoute("/api/public/telegram/webhook")({
         }
 
         const update = (await request.json().catch(() => null)) as any;
+
+        // 1. Handle Inline Button Clicks ([Approve & Build Batch] or [Discard])
+        if (update?.callback_query) {
+          const cb = update.callback_query;
+          const callbackId = cb.id;
+          const data = String(cb.data || "");
+          const chatId = cb.message?.chat?.id;
+
+          await answerCallback(callbackId, "Processing your choice...");
+
+          if (data.startsWith("approve:")) {
+            await sendText(
+              chatId,
+              `✅ <b>Style Approved!</b>\nStarting batch render for project. Keep your browser open to complete rendering.`
+            );
+          } else if (data.startsWith("discard:")) {
+            await sendText(chatId, `❌ <b>Preview discarded.</b> You can generate a new preview anytime.`);
+          }
+          return Response.json({ ok: true });
+        }
+
+        // 2. Normal Message & Command Handling
         const msg = update?.message;
         const chatId = msg?.chat?.id;
         const text: string = typeof msg?.text === "string" ? msg.text.slice(0, 500).trim() : "";
@@ -75,9 +97,12 @@ export const Route = createFileRoute("/api/public/telegram/webhook")({
             const code = args[0].replace(/[^A-Za-z0-9]/g, "").slice(0, 32);
             const { data, error } = await db().rpc("telegram_link" as any, { _code: code, _chat_id: chatId, _key: key });
             if (error) throw error;
-            await sendText(chatId, data
-              ? `✅ Connected! I'm your Creative Factory VA.\n\n${HELP}`
-              : "That link expired. Open Settings in the app and tap Connect Telegram again.");
+            await sendText(
+              chatId,
+              data
+                ? `✅ Connected! I'm your Creative Factory VA.\n\n${HELP}`
+                : "That link expired. Open Settings in the app and tap Connect Telegram again."
+            );
             return Response.json({ ok: true });
           }
 
@@ -87,7 +112,10 @@ export const Route = createFileRoute("/api/public/telegram/webhook")({
           if (error) throw error;
           const res = data as { linked: boolean; data: unknown };
           if (!res?.linked) {
-            await sendText(chatId, "Hi! Open Settings in the Creative Factory app and tap <b>Connect Telegram</b> to link me to your account.");
+            await sendText(
+              chatId,
+              "Hi! Open Settings in the Creative Factory app and tap <b>Connect Telegram</b> to link me to your account."
+            );
           } else {
             await sendText(chatId, command === "help" ? HELP : format(command, res.data));
           }
