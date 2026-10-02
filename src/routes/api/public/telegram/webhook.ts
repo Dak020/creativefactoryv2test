@@ -68,7 +68,7 @@ export const Route = createFileRoute("/api/public/telegram/webhook")({
 
         const key = botKey(token);
         const [rawCmd, ...args] = text.split(/\s+/);
-        const cmd = rawCmd.toLowerCase().replace(/^\//, "").replace(/@.*$/, "");
+        const cmd = (rawCmd ?? "").toLowerCase().replace(/^\//, "").replace(/@.*$/, "");
 
         try {
           if (cmd === "start" && args[0]) {
