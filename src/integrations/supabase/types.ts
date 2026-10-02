@@ -867,6 +867,39 @@ export type Database = {
         }
         Relationships: []
       }
+      telegram_links: {
+        Row: {
+          bot_key_hash: string
+          chat_id: number | null
+          created_at: string
+          id: string
+          link_code: string | null
+          linked_at: string | null
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          bot_key_hash: string
+          chat_id?: number | null
+          created_at?: string
+          id?: string
+          link_code?: string | null
+          linked_at?: string | null
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          bot_key_hash?: string
+          chat_id?: number | null
+          created_at?: string
+          id?: string
+          link_code?: string | null
+          linked_at?: string | null
+          updated_at?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
       trending_audios: {
         Row: {
           audio_url: string | null
@@ -1017,6 +1050,14 @@ export type Database = {
       replace_trending_audios: {
         Args: { _platform: string; _region: string; _rows: Json }
         Returns: number
+      }
+      telegram_command: {
+        Args: { _chat_id: number; _cmd: string; _key: string }
+        Returns: Json
+      }
+      telegram_link: {
+        Args: { _chat_id: number; _code: string; _key: string }
+        Returns: boolean
       }
     }
     Enums: {
