@@ -7,9 +7,9 @@ const esc = (s: unknown) => String(s ?? "").replace(/[<>&]/g, (c) => ({ "<": "&l
 
 const HELP = [
   "<b>Creative Factory VA Commands</b>",
-  "/status — workspace overview",
-  "/projects — your active projects",
+  "/projects — open project workspace & actions",
   "/addhook — pick a project & paste a new hook",
+  "/status — workspace overview",
   "/clips — your latest clips",
   "/trends — top trending sounds",
   "/schedule — upcoming posts",
@@ -64,13 +64,141 @@ export const Route = createFileRoute("/api/public/telegram/webhook")({
         const update = (await request.json().catch(() => null)) as any;
         const key = botKey(token);
 
-        // 1. Handle Inline Button Clicks
+        // 1. Handle Inline Button Clicks & Project Actions
         if (update?.callback_query) {
           const cb = update.callback_query;
           const callbackId = cb.id;
           const data = String(cb.data || "");
           const chatId = cb.message?.chat?.id;
 
+          // Open project dashboard
+          if (data.startsWith("open_project:")) {
+            const projectId = data.split(":")[1];
+            await answerCallback(callbackId);
+
+            const [projRes, hooksRes] = await Promise.all([
+              db().from("projects").select("*").eq("id", projectId).maybeSingle(),
+              db().from("hooks").select("id").eq("project_id", projectId),
+            ]);
+
+            const proj = projRes.data;
+            if (!proj) {
+              await sendText(chatId, "Project not found.");
+              return Response.json({ ok: true });
+            }
+
+            const hookCount = hooksRes.data?.length ?? 0;
+
+            const keyboard = {
+              inline_keyboard: [
+                [
+                  { text: "➕ Add Hook", callback_data: `select_project_hook:${proj.id}:${proj.name.slice(0, 20)}` },
+                  { text: `📝 View Hooks (${hookCount})`, callback_data: `view_hooks:${proj.id}:${proj.name.slice(0, 20)}` },
+                ],
+                [
+                  { text: "🚀 Queue Test Render", callback_data: `queue_render:${proj.id}:${proj.name.slice(0, 20)}` },
+                ],
+                [
+                  { text: "🔙 All Projects", callback_data: "list_projects" },
+                ],
+              ],
+            };
+
+            await sendText(
+              chatId,
+              `📁 <b>Project: ${esc(proj.name)}</b>\n\n` +
+              `• <b>Style:</b> ${esc(proj.content_style || "general")}\n` +
+              `• <b>Platform:</b> ${esc(proj.platform || "tiktok")}\n` +
+              `• <b>Saved Hooks:</b> ${hookCount}\n\n` +
+              `Choose an action below:`,
+              keyboard
+            );
+            return Response.json({ ok: true });
+          }
+
+          // Return to project list
+          if (data === "list_projects") {
+            await answerCallback(callbackId);
+            const { data: link } = await db().from("telegram_links").select("user_id").eq("chat_id", chatId).maybeSingle();
+            if (link?.user_id) {
+              const { data: projs } = await db().from("projects").select("id, name").eq("user_id", link.user_id);
+              const keyboard = {
+                inline_keyboard: (projs || []).slice(0, 8).map((p) => [
+                  { text: `📁 ${p.name.slice(0, 25)}`, callback_data: `open_project:${p.id}` },
+                ]),
+              };
+              await sendText(chatId, "📁 <b>Your Projects:</b>\nTap a project to work in it:", keyboard);
+            }
+            return Response.json({ ok: true });
+          }
+
+          // View hooks for a project
+          if (data.startsWith("view_hooks:")) {
+            const [_, projectId, projectName] = data.split(":");
+            await answerCallback(callbackId);
+
+            const { data: hooks } = await db()
+              .from("hooks")
+              .select("text, is_winner")
+              .eq("project_id", projectId)
+              .order("created_at", { ascending: false })
+              .limit(8);
+
+            if (!hooks || hooks.length === 0) {
+              await sendText(
+                chatId,
+                `📝 No hooks found in <b>${esc(projectName)}</b>.\nUse the button below to add one.`,
+                {
+                  inline_keyboard: [
+                    [{ text: "➕ Add Hook", callback_data: `select_project_hook:${projectId}:${projectName}` }],
+                    [{ text: "🔙 Back to Project", callback_data: `open_project:${projectId}` }],
+                  ],
+                }
+              );
+            } else {
+              const hookList = hooks.map((h, i) => `${i + 1}. "${esc(h.text)}"${h.is_winner ? " ⭐" : ""}`).join("\n\n");
+              await sendText(
+                chatId,
+                `📝 <b>Hooks in ${esc(projectName)}:</b>\n\n${hookList}`,
+                {
+                  inline_keyboard: [
+                    [{ text: "➕ Add Another Hook", callback_data: `select_project_hook:${projectId}:${projectName}` }],
+                    [{ text: "🔙 Back to Project", callback_data: `open_project:${projectId}` }],
+                  ],
+                }
+              );
+            }
+            return Response.json({ ok: true });
+          }
+
+          // Queue Render for a project
+          if (data.startsWith("queue_render:")) {
+            const [_, projectId, projectName] = data.split(":");
+            await answerCallback(callbackId, "Queueing render...");
+
+            const { data: link } = await db().from("telegram_links").select("user_id").eq("chat_id", chatId).maybeSingle();
+            if (link?.user_id) {
+              const { error: jobErr } = await db().from("render_jobs").insert({
+                user_id: link.user_id,
+                project_id: projectId,
+                status: "queued",
+                source: "telegram",
+              });
+
+              if (jobErr) {
+                await sendText(chatId, `❌ Could not queue render: ${esc(jobErr.message)}`);
+              } else {
+                await sendText(
+                  chatId,
+                  `🚀 <b>Render Queued for ${esc(projectName)}!</b>\n\n` +
+                  `Keep your Creative Factory browser tab open. The browser will pick up this job, render the video, and the preview will be sent here.`
+                );
+              }
+            }
+            return Response.json({ ok: true });
+          }
+
+          // Add Hook prompt
           if (data.startsWith("select_project_hook:")) {
             const parts = data.split(":");
             const projectId = parts[1];
@@ -112,7 +240,7 @@ export const Route = createFileRoute("/api/public/telegram/webhook")({
           return Response.json({ ok: true });
         }
 
-        // Check if this is a reply to the hook prompt
+        // Handle reply to hook prompt
         if (msg.reply_to_message?.text && msg.reply_to_message.text.includes("Reply directly to this message with your hook text")) {
           const idMatch = msg.reply_to_message.text.match(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i);
           if (idMatch) {
@@ -137,7 +265,16 @@ export const Route = createFileRoute("/api/public/telegram/webhook")({
               if (insertErr) {
                 await sendText(chatId, `❌ Failed to save hook: ${esc(insertErr.message)}`);
               } else {
-                await sendText(chatId, `✅ <b>Hook added!</b>\n\n"<i>${esc(text)}</i>"\n\nIt is now saved in your project's hook library.`);
+                await sendText(
+                  chatId,
+                  `✅ <b>Hook added!</b>\n\n"<i>${esc(text)}</i>"\n\nIt is now saved in your project's hook library.`,
+                  {
+                    inline_keyboard: [
+                      [{ text: "📁 Open Project", callback_data: `open_project:${projectId}` }],
+                      [{ text: "➕ Add Another Hook", callback_data: `select_project_hook:${projectId}:Project` }],
+                    ],
+                  }
+                );
               }
               return Response.json({ ok: true });
             }
@@ -161,7 +298,7 @@ export const Route = createFileRoute("/api/public/telegram/webhook")({
             return Response.json({ ok: true });
           }
 
-          // Handle /projects
+          // Handle /projects command: clickable buttons for every project
           if (cmd === "projects" || cmd === "project") {
             const { data: link } = await db().from("telegram_links").select("user_id").eq("chat_id", chatId).maybeSingle();
             if (!link?.user_id) {
@@ -172,13 +309,23 @@ export const Route = createFileRoute("/api/public/telegram/webhook")({
             if (!projs || projs.length === 0) {
               await sendText(chatId, "📁 No projects found. Create one in the app first.");
             } else {
-              const list = projs.map((p, i) => `${i + 1}. <b>${esc(p.name)}</b> (${esc(p.content_style || "general")})`).join("\n");
-              await sendText(chatId, `📁 <b>Your Projects:</b>\n\n${list}\n\nUse /addhook to add a hook to one.`);
+              const inlineKeyboard = projs.slice(0, 8).map((p) => [
+                {
+                  text: `📁 ${p.name.slice(0, 25)}`,
+                  callback_data: `open_project:${p.id}`,
+                },
+              ]);
+
+              await sendText(
+                chatId,
+                "📁 <b>Your Projects:</b>\nTap any project below to open its workspace and actions:",
+                { inline_keyboard: inlineKeyboard }
+              );
             }
             return Response.json({ ok: true });
           }
 
-          // Handle /addhook
+          // Handle /addhook command: show project picker buttons
           if (cmd === "addhook" || cmd === "addhooks") {
             const { data: link } = await db().from("telegram_links").select("user_id").eq("chat_id", chatId).maybeSingle();
             if (!link?.user_id) {
