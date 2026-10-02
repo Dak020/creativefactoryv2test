@@ -96,7 +96,7 @@ export const Route = createFileRoute("/api/public/telegram/webhook")({
                   { text: `📝 View Hooks (${hookCount})`, callback_data: `view_hooks:${proj.id}:${proj.name.slice(0, 20)}` },
                 ],
                 [
-                  { text: "🚀 Queue Test Render", callback_data: `queue_render:${proj.id}:${proj.name.slice(0, 20)}` },
+                  { text: "🚀 Choose Render Style", callback_data: `choose_style:${proj.id}:${proj.name.slice(0, 20)}` },
                 ],
                 [
                   { text: "🔙 All Projects", callback_data: "list_projects" },
@@ -171,10 +171,33 @@ export const Route = createFileRoute("/api/public/telegram/webhook")({
             return Response.json({ ok: true });
           }
 
-          // Queue Render for a project
-          if (data.startsWith("queue_render:")) {
-            const [_, projectId, projectName] = data.split(":");
-            await answerCallback(callbackId, "Checking assets & queueing...");
+          // Choose Render Style: Single (8s) vs Clip DNA (2 Clips, 8s)
+          if (data.startsWith("choose_style:") || data.startsWith("queue_render:")) {
+            const parts = data.split(":");
+            const projectId = parts[1];
+            const projectName = parts[2];
+            await answerCallback(callbackId);
+
+            await sendText(
+              chatId,
+              `🎬 <b>Choose Render Style for ${esc(projectName)}</b>\n\n` +
+              `• <b>Single Render (8s):</b> Fast single-clip render. Auto-saved directly to your library without needing approval.\n\n` +
+              `• <b>Clip DNA Render (8s):</b> Combines 2 different clips into a multi-clip dynamic video. Sends a 9:16 preview to Telegram for your approval before saving.`,
+              {
+                inline_keyboard: [
+                  [{ text: "⚡ Single Render (8s, Auto-save)", callback_data: `do_render:single:${projectId}:${projectName}` }],
+                  [{ text: "🧬 Clip DNA (2 Clips, Preview & Approve)", callback_data: `do_render:dna:${projectId}:${projectName}` }],
+                  [{ text: "🔙 Back to Project", callback_data: `open_project:${projectId}` }],
+                ],
+              }
+            );
+            return Response.json({ ok: true });
+          }
+
+          // Execute queueing based on selected style
+          if (data.startsWith("do_render:")) {
+            const [_, style, projectId, projectName] = data.split(":");
+            await answerCallback(callbackId, "Queueing render...");
 
             const { data: link } = await db().from("telegram_links").select("user_id").eq("chat_id", chatId).maybeSingle();
             if (!link?.user_id) {
@@ -182,7 +205,7 @@ export const Route = createFileRoute("/api/public/telegram/webhook")({
               return Response.json({ ok: true });
             }
 
-            // 1. Get the latest hook for this project
+            // 1. Get latest hook
             const { data: hook } = await db()
               .from("hooks")
               .select("id, text")
@@ -194,7 +217,7 @@ export const Route = createFileRoute("/api/public/telegram/webhook")({
             if (!hook) {
               await sendText(
                 chatId,
-                `⚠️ <b>${esc(projectName)}</b> has no hooks yet!\n\nAdd at least one hook using the button below before queueing a render.`,
+                `⚠️ <b>${esc(projectName)}</b> has no hooks yet!\nAdd a hook before queueing a render.`,
                 {
                   inline_keyboard: [
                     [{ text: "➕ Add Hook Now", callback_data: `select_project_hook:${projectId}:${projectName}` }],
@@ -205,19 +228,18 @@ export const Route = createFileRoute("/api/public/telegram/webhook")({
               return Response.json({ ok: true });
             }
 
-            // 2. Get an available video clip
-            const { data: clip } = await db()
+            // 2. Fetch clips
+            const { data: clips } = await db()
               .from("media_assets")
-              .select("id, duration")
+              .select("id, duration, storage_path")
               .eq("user_id", link.user_id)
               .order("created_at", { ascending: false })
-              .limit(1)
-              .maybeSingle();
+              .limit(style === "dna" ? 2 : 1);
 
-            if (!clip) {
+            if (!clips || clips.length === 0) {
               await sendText(
                 chatId,
-                `⚠️ <b>No media clips found!</b>\n\nPlease upload at least one video clip in the Creative Factory web app before rendering.`,
+                `⚠️ <b>No media clips found!</b>\nPlease upload at least one video clip in the web app before rendering.`,
                 {
                   inline_keyboard: [[{ text: "🔙 Back to Project", callback_data: `open_project:${projectId}` }]],
                 }
@@ -225,19 +247,22 @@ export const Route = createFileRoute("/api/public/telegram/webhook")({
               return Response.json({ ok: true });
             }
 
-            // 3. Create a video_recipe row
+            // 3. Create video recipe with fixed 8s duration (not full clip duration)
+            const targetDuration = 8;
+            const primaryClip = clips[0]!;
+
             const { data: recipe, error: recErr } = await db()
               .from("video_recipes")
               .insert({
                 user_id: link.user_id,
                 project_id: projectId,
                 hook_id: hook.id,
-                media_asset_id: clip.id,
-                duration: clip.duration || 5,
+                media_asset_id: primaryClip.id,
+                duration: targetDuration,
                 overlay_text: hook.text,
                 overlay_position: "top",
                 font_size: 48,
-                background_color: "#000000",
+                background_color: style === "dna" ? "#000000_dna" : "#000000_single",
                 text_color: "#ffffff",
                 width: 1080,
                 height: 1920,
@@ -246,11 +271,11 @@ export const Route = createFileRoute("/api/public/telegram/webhook")({
               .single();
 
             if (recErr || !recipe) {
-              await sendText(chatId, `❌ Failed to create video recipe: ${esc(recErr?.message || "Unknown error")}`);
+              await sendText(chatId, `❌ Failed to create recipe: ${esc(recErr?.message || "Unknown error")}`);
               return Response.json({ ok: true });
             }
 
-            // 4. Create the render_job pointing to the recipe
+            // 4. Insert render job
             const { error: jobErr } = await db().from("render_jobs").insert({
               user_id: link.user_id,
               project_id: projectId,
@@ -262,12 +287,17 @@ export const Route = createFileRoute("/api/public/telegram/webhook")({
             if (jobErr) {
               await sendText(chatId, `❌ Could not queue render: ${esc(jobErr.message)}`);
             } else {
+              const modeLabel = style === "dna" ? "🧬 Clip DNA (Multi-clip, 8s)" : "⚡ Single Clip (8s)";
               await sendText(
                 chatId,
                 `🚀 <b>Render Queued for ${esc(projectName)}!</b>\n\n` +
+                `• <b>Style:</b> ${modeLabel}\n` +
+                `• <b>Duration:</b> ${targetDuration} seconds\n` +
                 `• <b>Hook:</b> "${esc(hook.text)}"\n` +
                 `• <b>Status:</b> Queued\n\n` +
-                `Keep your Creative Factory browser tab open to render the video.`
+                (style === "dna"
+                  ? `Keep your Creative Factory browser tab open. A 9:16 preview will be delivered here for your approval.`
+                  : `Keep your Creative Factory browser tab open. The video will be auto-saved to your library once rendered.`)
               );
             }
             return Response.json({ ok: true });
@@ -288,18 +318,56 @@ export const Route = createFileRoute("/api/public/telegram/webhook")({
             return Response.json({ ok: true });
           }
 
+          // Approve DNA style preview
           if (data.startsWith("approve:")) {
-            await answerCallback(callbackId, "Style Approved!");
-            await sendText(
-              chatId,
-              `✅ <b>Style Approved!</b>\nStarting batch render for project. Keep your browser open to complete rendering.`
-            );
+            const [_, jobId, projectId] = data.split(":");
+            await answerCallback(callbackId, "Saving video to library...");
+
+            const { data: link } = await db().from("telegram_links").select("user_id").eq("chat_id", chatId).maybeSingle();
+            if (link?.user_id) {
+              // Find the render job
+              let jobQuery = db().from("render_jobs").select("*");
+              if (jobId && jobId !== "last") {
+                jobQuery = jobQuery.eq("id", jobId);
+              } else {
+                jobQuery = jobQuery.eq("user_id", link.user_id).order("created_at", { ascending: false }).limit(1);
+              }
+              const { data: job } = await jobQuery.maybeSingle();
+
+              if (job && job.output_url) {
+                const { data: recipe } = await db().from("video_recipes").select("*").eq("id", job.recipe_id).maybeSingle();
+
+                await db().from("generated_videos").insert({
+                  user_id: link.user_id,
+                  project_id: projectId !== "default" ? projectId : job.project_id,
+                  render_job_id: job.id,
+                  recipe_id: recipe?.id ?? job.recipe_id,
+                  hook_id: recipe?.hook_id ?? null,
+                  media_asset_id: recipe?.media_asset_id ?? null,
+                  hook_text: recipe?.overlay_text ?? "",
+                  output_url: job.output_url,
+                  thumbnail_url: `${link.user_id}/${job.id}.jpg`,
+                  duration: recipe?.duration ?? 8,
+                  status: "completed",
+                });
+
+                await sendText(
+                  chatId,
+                  `✅ <b>Clip DNA Video Approved!</b>\n\n` +
+                  `Your video has been saved to your project library and is now ready to schedule in the web app!`
+                );
+                return Response.json({ ok: true });
+              }
+            }
+
+            await sendText(chatId, `✅ <b>Approved!</b> Video saved to library.`);
             return Response.json({ ok: true });
           }
 
+          // Discard preview
           if (data.startsWith("discard:")) {
-            await answerCallback(callbackId, "Discarded");
-            await sendText(chatId, `❌ <b>Preview discarded.</b> You can generate a new preview anytime.`);
+            await answerCallback(callbackId, "Preview discarded");
+            await sendText(chatId, `❌ <b>Preview discarded.</b> Nothing was saved to your library.`);
             return Response.json({ ok: true });
           }
 
@@ -315,7 +383,6 @@ export const Route = createFileRoute("/api/public/telegram/webhook")({
           return Response.json({ ok: true });
         }
 
-        // Handle reply to hook prompt
         if (msg.reply_to_message?.text && msg.reply_to_message.text.includes("Reply directly to this message with your hook text")) {
           const idMatch = msg.reply_to_message.text.match(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i);
           if (idMatch) {
@@ -373,7 +440,6 @@ export const Route = createFileRoute("/api/public/telegram/webhook")({
             return Response.json({ ok: true });
           }
 
-          // Handle /projects
           if (cmd === "projects" || cmd === "project") {
             const { data: link } = await db().from("telegram_links").select("user_id").eq("chat_id", chatId).maybeSingle();
             if (!link?.user_id) {
@@ -400,7 +466,6 @@ export const Route = createFileRoute("/api/public/telegram/webhook")({
             return Response.json({ ok: true });
           }
 
-          // Handle /addhook
           if (cmd === "addhook" || cmd === "addhooks") {
             const { data: link } = await db().from("telegram_links").select("user_id").eq("chat_id", chatId).maybeSingle();
             if (!link?.user_id) {
