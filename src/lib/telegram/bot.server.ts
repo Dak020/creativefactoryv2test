@@ -8,7 +8,6 @@ export function botToken(): string {
   return t;
 }
 
-/** Key the webhook passes to the database; only its hash is stored. */
 export function botKey(token: string) {
   return createHash("sha256").update(`cf-bot:${token}`).digest("hex");
 }
@@ -33,8 +32,15 @@ export async function tg(method: string, body: Record<string, unknown>) {
   return json.result;
 }
 
-export function sendText(chatId: number, text: string) {
-  return tg("sendMessage", { chat_id: chatId, text, parse_mode: "HTML", disable_web_page_preview: true });
+export function sendText(chatId: number, text: string, replyMarkup?: unknown) {
+  const body: Record<string, unknown> = {
+    chat_id: chatId,
+    text,
+    parse_mode: "HTML",
+    disable_web_page_preview: true,
+  };
+  if (replyMarkup) body["reply_markup"] = replyMarkup;
+  return tg("sendMessage", body);
 }
 
 export async function sendVideoWithButtons(
