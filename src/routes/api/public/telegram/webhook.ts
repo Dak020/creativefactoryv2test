@@ -174,26 +174,101 @@ export const Route = createFileRoute("/api/public/telegram/webhook")({
           // Queue Render for a project
           if (data.startsWith("queue_render:")) {
             const [_, projectId, projectName] = data.split(":");
-            await answerCallback(callbackId, "Queueing render...");
+            await answerCallback(callbackId, "Checking assets & queueing...");
 
             const { data: link } = await db().from("telegram_links").select("user_id").eq("chat_id", chatId).maybeSingle();
-            if (link?.user_id) {
-              const { error: jobErr } = await db().from("render_jobs").insert({
+            if (!link?.user_id) {
+              await sendText(chatId, "Please connect your Telegram account first in Settings.");
+              return Response.json({ ok: true });
+            }
+
+            // 1. Get the latest hook for this project
+            const { data: hook } = await db()
+              .from("hooks")
+              .select("id, text")
+              .eq("project_id", projectId)
+              .order("created_at", { ascending: false })
+              .limit(1)
+              .maybeSingle();
+
+            if (!hook) {
+              await sendText(
+                chatId,
+                `⚠️ <b>${esc(projectName)}</b> has no hooks yet!\n\nAdd at least one hook using the button below before queueing a render.`,
+                {
+                  inline_keyboard: [
+                    [{ text: "➕ Add Hook Now", callback_data: `select_project_hook:${projectId}:${projectName}` }],
+                    [{ text: "🔙 Back to Project", callback_data: `open_project:${projectId}` }],
+                  ],
+                }
+              );
+              return Response.json({ ok: true });
+            }
+
+            // 2. Get an available video clip
+            const { data: clip } = await db()
+              .from("media_assets")
+              .select("id, duration")
+              .eq("user_id", link.user_id)
+              .order("created_at", { ascending: false })
+              .limit(1)
+              .maybeSingle();
+
+            if (!clip) {
+              await sendText(
+                chatId,
+                `⚠️ <b>No media clips found!</b>\n\nPlease upload at least one video clip in the Creative Factory web app before rendering.`,
+                {
+                  inline_keyboard: [[{ text: "🔙 Back to Project", callback_data: `open_project:${projectId}` }]],
+                }
+              );
+              return Response.json({ ok: true });
+            }
+
+            // 3. Create a video_recipe row
+            const { data: recipe, error: recErr } = await db()
+              .from("video_recipes")
+              .insert({
                 user_id: link.user_id,
                 project_id: projectId,
-                status: "queued",
-                source: "telegram",
-              });
+                hook_id: hook.id,
+                media_asset_id: clip.id,
+                duration: clip.duration || 5,
+                overlay_text: hook.text,
+                overlay_position: "top",
+                font_size: 48,
+                background_color: "#000000",
+                text_color: "#ffffff",
+                width: 1080,
+                height: 1920,
+              })
+              .select("id")
+              .single();
 
-              if (jobErr) {
-                await sendText(chatId, `❌ Could not queue render: ${esc(jobErr.message)}`);
-              } else {
-                await sendText(
-                  chatId,
-                  `🚀 <b>Render Queued for ${esc(projectName)}!</b>\n\n` +
-                  `Keep your Creative Factory browser tab open. The browser will pick up this job, render the video, and the preview will be sent here.`
-                );
-              }
+            if (recErr || !recipe) {
+              await sendText(chatId, `❌ Failed to create video recipe: ${esc(recErr?.message || "Unknown error")}`);
+              return Response.json({ ok: true });
+            }
+
+            // 4. Create the render_job pointing to the recipe
+            const { error: jobErr } = await db().from("render_jobs").insert({
+              user_id: link.user_id,
+              project_id: projectId,
+              recipe_id: recipe.id,
+              status: "queued",
+              progress: 0,
+            });
+
+            if (jobErr) {
+              await sendText(chatId, `❌ Could not queue render: ${esc(jobErr.message)}`);
+            } else {
+              await sendText(
+                chatId,
+                `🚀 <b>Render Queued for ${esc(projectName)}!</b>\n\n` +
+                `• <b>Hook:</b> "${esc(hook.text)}"\n` +
+                `• <b>Status:</b> Queued\n\n` +
+                `Keep your Creative Factory browser tab open to render the video.`
+              );
             }
             return Response.json({ ok: true });
           }
@@ -298,7 +373,7 @@ export const Route = createFileRoute("/api/public/telegram/webhook")({
             return Response.json({ ok: true });
           }
 
-          // Handle /projects command: clickable buttons for every project
+          // Handle /projects
           if (cmd === "projects" || cmd === "project") {
             const { data: link } = await db().from("telegram_links").select("user_id").eq("chat_id", chatId).maybeSingle();
             if (!link?.user_id) {
@@ -325,7 +400,7 @@ export const Route = createFileRoute("/api/public/telegram/webhook")({
             return Response.json({ ok: true });
           }
 
-          // Handle /addhook command: show project picker buttons
+          // Handle /addhook
           if (cmd === "addhook" || cmd === "addhooks") {
             const { data: link } = await db().from("telegram_links").select("user_id").eq("chat_id", chatId).maybeSingle();
             if (!link?.user_id) {
