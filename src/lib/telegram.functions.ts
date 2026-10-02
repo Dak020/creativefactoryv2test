@@ -42,7 +42,6 @@ export const connectTelegramFn = createServerFn({ method: "POST" })
       allowed_updates: ["message", "callback_query"],
     });
 
-    // Register all slash commands with Telegram
     await tg("setMyCommands", {
       commands: [
         { command: "status", description: "Workspace overview" },
@@ -68,9 +67,28 @@ export const disconnectTelegramFn = createServerFn({ method: "POST" })
     return { ok: true };
   });
 
+export const sendTelegramNotificationFn = createServerFn({ method: "POST" })
+  .middleware([requireSupabaseAuth])
+  .inputValidator((d: { message: string }) => d)
+  .handler(async ({ data, context }) => {
+    const { supabase, userId } = context;
+    const { data: link } = await supabase
+      .from("telegram_links" as any)
+      .select("chat_id")
+      .eq("user_id", userId)
+      .maybeSingle();
+
+    const row = link as { chat_id: number | null } | null;
+    if (!row?.chat_id) return { ok: false };
+
+    const { sendText } = await import("@/lib/telegram/bot.server");
+    await sendText(row.chat_id, data.message);
+    return { ok: true };
+  });
+
 export const sendTelegramPreviewFn = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
-  .inputValidator((d: { base64Video: string; caption?: string; projectId?: string }) => d)
+  .inputValidator((d: { base64Video: string; caption?: string; projectId?: string; jobId?: string }) => d)
   .handler(async ({ data, context }) => {
     const { supabase, userId } = context;
 
@@ -82,7 +100,7 @@ export const sendTelegramPreviewFn = createServerFn({ method: "POST" })
 
     const row = link as { chat_id: number | null } | null;
     if (!row?.chat_id) {
-      throw new Error("Telegram account is not connected. Open Settings to connect it.");
+      throw new Error("Telegram account is not connected.");
     }
 
     const { sendVideoWithButtons } = await import("@/lib/telegram/bot.server");
@@ -91,8 +109,8 @@ export const sendTelegramPreviewFn = createServerFn({ method: "POST" })
     const replyMarkup = {
       inline_keyboard: [
         [
-          { text: "👍 Approve & Build Batch", callback_data: `approve:${data.projectId || "default"}` },
-          { text: "❌ Discard", callback_data: `discard:${data.projectId || "default"}` },
+          { text: "👍 Approve & Save", callback_data: `approve:${data.jobId || "last"}:${data.projectId || "default"}` },
+          { text: "❌ Discard", callback_data: `discard:${data.jobId || "last"}:${data.projectId || "default"}` },
         ],
       ],
     };
@@ -100,7 +118,7 @@ export const sendTelegramPreviewFn = createServerFn({ method: "POST" })
     await sendVideoWithButtons(
       row.chat_id,
       videoBuffer,
-      data.caption || "🎬 <b>Style Preview Ready</b>\nReview your video preview below:",
+      data.caption || "🎬 <b>Clip DNA Style Preview Ready (9:16)</b>\nReview your preview below:",
       replyMarkup
     );
 
