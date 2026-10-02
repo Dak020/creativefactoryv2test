@@ -37,7 +37,7 @@ export type SolverClip = {
   allowedSpeeds: number[];
   hookPlacement?: string | null;
   filename?: string;
-  seekMode?: "random" | "beginning" | "manual";
+  seekMode?: "random" | "beginning" | "manual" | undefined;
   seekSeconds?: number;
 };
 
