@@ -338,6 +338,58 @@ interface PreparedSegment {
   zoom: number;
 }
 
+async function seekVideo(video: HTMLVideoElement, targetTime: number, signal?: AbortSignal): Promise<void> {
+  // If targetTime is essentially where the video already is, resolve immediately without waiting on seeked event
+  if (Math.abs(video.currentTime - targetTime) < 0.05) {
+    return;
+  }
+  return new Promise<void>((resolve, reject) => {
+    let settled = false;
+    const cleanup = () => {
+      clearTimeout(timer);
+      video.removeEventListener("seeked", onSeeked);
+      video.removeEventListener("error", onError);
+      signal?.removeEventListener("abort", onAbort);
+    };
+    const onSeeked = () => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      resolve();
+    };
+    const onError = () => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      resolve();
+    };
+    const onAbort = () => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      reject(new RenderCancelledError());
+    };
+    // 4-second safety fallback so detached elements in Chromium never stall the pipeline
+    const timer = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      resolve();
+    }, 4000);
+
+    video.addEventListener("seeked", onSeeked, { once: true });
+    video.addEventListener("error", onError, { once: true });
+    signal?.addEventListener("abort", onAbort, { once: true });
+
+    try {
+      video.currentTime = targetTime;
+    } catch {
+      cleanup();
+      resolve();
+    }
+  });
+}
+
 async function prepareVideo(seg: SequenceSegment, withAudio: boolean, signal?: AbortSignal): Promise<PreparedSegment> {
   const video = document.createElement("video");
   video.crossOrigin = "anonymous";
@@ -356,8 +408,9 @@ async function prepareVideo(seg: SequenceSegment, withAudio: boolean, signal?: A
     await waitFor(video, "loadedmetadata", { signal });
     const realDuration = Number.isFinite(video.duration) ? video.duration : seg.sourceOut;
     const start = Math.max(0, Math.min(seg.sourceIn, Math.max(0, realDuration - 0.05)));
-    video.currentTime = start;
-    await waitFor(video, "seeked", { signal });
+    
+    await seekVideo(video, start, signal);
+
     const rate = Math.max(0.25, Math.min(4, seg.speed || 1));
     video.playbackRate = rate;
     const end = Math.max(start + 0.05, Math.min(seg.sourceOut, realDuration));
