@@ -294,12 +294,22 @@ export function RenderWorker() {
 
           toast.success("DNA Preview ready! Sending to Telegram for approval...", { id: toastId });
 
-          // Send 9:16 preview with inline Approve & Discard buttons
+          // Send 9:16 preview with inline Approve & Discard buttons.
+          // The browser session is already authenticated, so we mint a
+          // short-lived signed URL here and Telegram streams the video
+          // directly from storage — no server-side buffering.
           try {
+            const { data: signed, error: signErr } = await supabase.storage
+              .from(RENDER_BUCKET)
+              .createSignedUrl(outPath, 60 * 60);
+            if (signErr || !signed?.signedUrl) {
+              throw new Error(signErr?.message ?? "Could not sign video URL");
+            }
+
             await sendTelegramPreviewFn({
               data: {
+                signedUrl: signed.signedUrl,
                 storagePath: outPath,
-                bucket: RENDER_BUCKET,
                 caption: `🎬 <b>Clip DNA Preview (9:16)</b>\n\n• <b>Hook:</b> "${recipe.overlay_text}"\n• <b>Duration:</b> ${targetDuration}s\n\nApprove below to save to your project library:`,
                 projectId: job.project_id,
                 jobId: job.id,
@@ -308,6 +318,10 @@ export function RenderWorker() {
             toast.success("Preview delivered to Telegram!", { id: toastId });
           } catch (tgErr) {
             console.warn("Telegram preview sending error:", tgErr);
+            toast.error(
+              `Preview saved, but Telegram delivery failed: ${tgErr instanceof Error ? tgErr.message : "unknown error"}`,
+              { id: toastId },
+            );
           }
         } else {
           // --- Single Render: Auto-save directly without requiring approval ---
