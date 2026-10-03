@@ -291,9 +291,23 @@ export function waitFor(
       onAbort();
       return;
     }
+    // iOS WebKit fires these once; if already past that state, resolve now.
+    if (
+      (event === "loadedmetadata" && el.readyState >= 1) ||
+      (event === "loadeddata" && el.readyState >= 2) ||
+      (event === "canplay" && el.readyState >= 3) ||
+      (event === "seeked" && !el.seeking && el.readyState >= 2)
+    ) {
+      ok();
+      return;
+    }
     el.addEventListener(event, ok, { once: true });
     el.addEventListener("error", fail, { once: true });
     opts?.signal?.addEventListener("abort", onAbort, { once: true });
+    // Mobile Safari won't buffer a detached video until load() is called.
+    if (event === "loadedmetadata" && el.readyState === 0 && el.networkState !== 2) {
+      try { el.load(); } catch { /* ignore */ }
+    }
   });
 }
 

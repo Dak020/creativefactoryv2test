@@ -88,9 +88,10 @@ export const sendTelegramNotificationFn = createServerFn({ method: "POST" })
 
 export const sendTelegramPreviewFn = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
-  .inputValidator((d: { base64Video: string; caption?: string; projectId?: string; jobId?: string }) => d)
+  .inputValidator((d: { storagePath: string; bucket?: string; caption?: string; projectId?: string; jobId?: string }) => d)
   .handler(async ({ data, context }) => {
     const { supabase, userId } = context;
+    if (!data.storagePath.startsWith(`${userId}/`)) throw new Error("Invalid video path.");
 
     const { data: link } = await supabase
       .from("telegram_links" as any)
@@ -103,8 +104,13 @@ export const sendTelegramPreviewFn = createServerFn({ method: "POST" })
       throw new Error("Telegram account is not connected.");
     }
 
+    const { data: file, error: dlErr } = await supabase.storage
+      .from(data.bucket || "renders")
+      .download(data.storagePath);
+    if (dlErr || !file) throw new Error(`Could not load video: ${dlErr?.message ?? "missing"}`);
+
     const { sendVideoWithButtons } = await import("@/lib/telegram/bot.server");
-    const videoBuffer = Buffer.from(data.base64Video, "base64");
+    const videoBuffer = Buffer.from(await file.arrayBuffer());
 
     const replyMarkup = {
       inline_keyboard: [

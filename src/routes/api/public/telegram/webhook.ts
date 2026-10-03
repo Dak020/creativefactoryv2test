@@ -318,13 +318,13 @@ export const Route = createFileRoute("/api/public/telegram/webhook")({
               const parts = data.split(":");
               audioMode = parts[1] as any; // "original" | "auto" | "none"
               style = parts[2] === "d" ? "dna" : "single";
-              projectId = parts[3];
+              projectId = parts[3] ?? "";
             } else {
               const parts = data.split(":");
               audioMode = "lib";
               style = parts[1] === "d" ? "dna" : "single";
-              libIndex = parseInt(parts[2], 10);
-              projectId = parts[3];
+              libIndex = parseInt(parts[2] ?? "", 10);
+              projectId = parts[3] ?? "";
             }
 
             const { data: proj } = await db().from("projects").select("name").eq("id", projectId).maybeSingle();
