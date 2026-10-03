@@ -88,7 +88,7 @@ export const sendTelegramNotificationFn = createServerFn({ method: "POST" })
 
 export const sendTelegramPreviewFn = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
-  .inputValidator((d: { signedUrl: string; storagePath: string; caption?: string; projectId?: string; jobId?: string }) => d)
+  .inputValidator((d: { signedUrl: string; storagePath: string; caption?: string; jobId?: string; batchTotal?: number }) => d)
   .handler(async ({ data, context }) => {
     const { supabase, userId } = context;
     if (!data.storagePath.startsWith(`${userId}/`)) throw new Error("Invalid video path.");
@@ -105,19 +105,23 @@ export const sendTelegramPreviewFn = createServerFn({ method: "POST" })
       throw new Error("Telegram account is not connected.");
     }
 
-    // Telegram streams the video directly from the signed storage URL —
-    // no server-side buffering of multi-MB files through the edge function.
     const { tg } = await import("@/lib/telegram/bot.server");
+    const jobId = data.jobId || "last";
+    const batchTotal = data.batchTotal || 1;
+
+    // Compact callback data kept strictly <= 44 bytes to respect Telegram limits
+    const approveText = batchTotal > 1 ? `👍 Approve & Make ${batchTotal - 1} More` : "👍 Approve & Save";
+    const approveCallback = batchTotal > 1 ? `apprv_b:${jobId}` : `approve:${jobId}`;
+
     const replyMarkup = {
       inline_keyboard: [
         [
-          { text: "👍 Approve & Save", callback_data: `approve:${data.jobId || "last"}:${data.projectId || "default"}` },
-          { text: "❌ Discard", callback_data: `discard:${data.jobId || "last"}:${data.projectId || "default"}` },
+          { text: approveText, callback_data: approveCallback },
+          { text: "❌ Discard", callback_data: `discard:${jobId}` },
         ],
       ],
     };
 
-    // tg() throws with the provider's error description on failure.
     await tg("sendVideo", {
       chat_id: row.chat_id,
       video: data.signedUrl,
