@@ -1,17 +1,82 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { createClient } from "@supabase/supabase-js";
 import { createHash, timingSafeEqual } from "crypto";
-import {
-  answerCallback,
-  buildBatchSelectKeyboard,
-  buildDurationKeyboard,
-  buildStyleSelectKeyboard,
-  deleteMessage,
-  editMessageText,
-  esc,
-  sendText,
-  sendVideoPreview,
-} from "@/lib/telegram.functions";
+import { tg, sendText, answerCallback } from "@/lib/telegram/bot.server";
+
+function esc(str: string | null | undefined): string {
+  if (!str) return "";
+  return str
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+}
+
+async function deleteMessage(chatId: number, messageId: number) {
+  try {
+    await tg("deleteMessage", { chat_id: chatId, message_id: messageId });
+  } catch (err) {
+    console.error("deleteMessage error:", err);
+  }
+}
+
+async function editMessageText(chatId: number, messageId: number, text: string, replyMarkup?: unknown) {
+  try {
+    const body: Record<string, unknown> = {
+      chat_id: chatId,
+      message_id: messageId,
+      text,
+      parse_mode: "HTML",
+    };
+    if (replyMarkup) body["reply_markup"] = replyMarkup;
+    await tg("editMessageText", body);
+  } catch (err) {
+    console.error("editMessageText error:", err);
+  }
+}
+
+function buildStyleSelectKeyboard(projectId: string) {
+  return {
+    inline_keyboard: [
+      [
+        { text: "Single Clip Cut", callback_data: `st_s:${projectId}` },
+        { text: "Clip DNA (Multi-Cut)", callback_data: `st_d:${projectId}` },
+      ],
+      [{ text: "Cancel", callback_data: "cancel_wizard" }],
+    ],
+  };
+}
+
+function buildDurationKeyboard(projectId: string, style: string) {
+  const prefix = style === "dna" ? "dur_d" : "dur_s";
+  return {
+    inline_keyboard: [
+      [
+        { text: "6s", callback_data: `${prefix}:6:${projectId}` },
+        { text: "8s (Default)", callback_data: `${prefix}:8:${projectId}` },
+      ],
+      [
+        { text: "10s", callback_data: `${prefix}:10:${projectId}` },
+        { text: "15s", callback_data: `${prefix}:15:${projectId}` },
+      ],
+      [{ text: "Cancel", callback_data: "cancel_wizard" }],
+    ],
+  };
+}
+
+function buildBatchSelectKeyboard(projectId: string, style: string, duration: number) {
+  const prefix = style === "dna" ? "bch_d" : "bch_s";
+  return {
+    inline_keyboard: [
+      [
+        { text: "1x Single", callback_data: `${prefix}:1:${duration}:${projectId}` },
+        { text: "3x Variants", callback_data: `${prefix}:3:${duration}:${projectId}` },
+        { text: "5x Variants", callback_data: `${prefix}:5:${duration}:${projectId}` },
+      ],
+      [{ text: "Cancel", callback_data: "cancel_wizard" }],
+    ],
+  };
+}
 
 function deriveTelegramWebhookSecret(telegramApiKey: string): string {
   return createHash("sha256")
@@ -196,7 +261,6 @@ export const Route = createFileRoute("/api/public/telegram/webhook")({
 
           // Step 2: Choose Duration (6s, 8s default, 10s, 15s)
           if (data.startsWith("step_dur:")) {
-            // Token format: "step_dur:s:<projId>" or "step_dur:d:<projId>"
             const parts = data.split(":");
             const style = parts[1] === "d" ? "dna" : "single";
             const projectId = parts[2];
@@ -215,7 +279,6 @@ export const Route = createFileRoute("/api/public/telegram/webhook")({
 
           // Step 3: Choose Batch Quantity (1x, 3x, 5x)
           if (data.startsWith("step_bat:")) {
-            // Token format: "step_bat:<s|d>:<dur>:<projId>"
             const parts = data.split(":");
             const style = parts[1] === "d" ? "dna" : "single";
             const duration = parseInt(parts[2], 10) || 8;
@@ -239,15 +302,12 @@ export const Route = createFileRoute("/api/public/telegram/webhook")({
 
           // Step 4: Choose Audio Soundtrack
           if (data.startsWith("step_aud:")) {
-            // Token format: "step_aud:<s|d>:<dur>:<bat>:<projId>"
             const parts = data.split(":");
-            const style = parts[1] === "d" ? "dna" : "single";
             const duration = parseInt(parts[2], 10) || 8;
             const batch = parseInt(parts[3], 10) || 1;
             const projectId = parts[4];
             await answerCallback(callbackId);
 
-            // Fetch user's saved soundtrack tracks
             const { data: link } = await db().from("telegram_links").select("user_id").eq("chat_id", chatId).maybeSingle();
             let libraryTracks: { id: string; name: string }[] = [];
             if (link?.user_id) {
@@ -287,7 +347,6 @@ export const Route = createFileRoute("/api/public/telegram/webhook")({
 
           // Step 5: Execute Render Queueing
           if (data.startsWith("do_rend:")) {
-            // Token format: "do_rend:<s|d>:<dur>:<bat>:<projId>:<audioKey>"
             const parts = data.split(":");
             const style = parts[1] === "d" ? "dna" : "single";
             const isDna = style === "dna";
@@ -304,7 +363,6 @@ export const Route = createFileRoute("/api/public/telegram/webhook")({
               return Response.json({ ok: true });
             }
 
-            // 1. Fetch project and assets
             const [projRes, hooksRes, clipsRes] = await Promise.all([
               db().from("projects").select("name").eq("id", projectId).maybeSingle(),
               db().from("hooks").select("id, text").eq("project_id", projectId).order("created_at", { ascending: false }),
@@ -323,7 +381,6 @@ export const Route = createFileRoute("/api/public/telegram/webhook")({
             const primaryHook = hooks[0] || { id: null, text: "Wait for the end..." };
             const primaryClip = clips[0];
 
-            // 2. Resolve Audio settings
             let withAudio = false;
             let soundtrackUrl: string | null = null;
             let audioLabel = "Original clip audio";
@@ -333,7 +390,6 @@ export const Route = createFileRoute("/api/public/telegram/webhook")({
               audioLabel = "Original clip audio";
             } else if (audioKey === "va") {
               withAudio = false;
-              // Pick trending track
               const { data: trending } = await db()
                 .from("soundtrack_tracks")
                 .select("storage_path, name")
@@ -367,10 +423,8 @@ export const Route = createFileRoute("/api/public/telegram/webhook")({
               audioLabel = "Silent (No audio)";
             }
 
-            // 3. Delete the wizard message to keep chat clean
             await deleteMessage(chatId, messageId);
 
-            // 4. Create base video recipe
             const { data: recipe, error: recErr } = await db()
               .from("video_recipes")
               .insert({
@@ -395,7 +449,7 @@ export const Route = createFileRoute("/api/public/telegram/webhook")({
               return Response.json({ ok: true });
             }
 
-            // 5. Store render hints with batch context encoded into the style string
+            // Encode batch count in style string without requiring a non-existent batch_total column
             const styleValue = isDna ? (batchTotal > 1 ? `dna:batch=${batchTotal}` : "dna") : "single";
             const { error: hintErr } = await db().from("render_job_hints").insert({
               recipe_id: recipe.id,
@@ -412,7 +466,6 @@ export const Route = createFileRoute("/api/public/telegram/webhook")({
               return Response.json({ ok: true });
             }
 
-            // 6. Enqueue the first job
             const { data: job, error: jobErr } = await db()
               .from("render_jobs")
               .insert({
@@ -430,7 +483,6 @@ export const Route = createFileRoute("/api/public/telegram/webhook")({
               return Response.json({ ok: true });
             }
 
-            // If Single render and batch > 1: enqueue the remaining variants immediately
             if (!isDna && batchTotal > 1) {
               for (let i = 1; i < batchTotal; i++) {
                 const hookItem = hooks[i % hooks.length]!;
@@ -490,7 +542,7 @@ export const Route = createFileRoute("/api/public/telegram/webhook")({
             return Response.json({ ok: true });
           }
 
-          // Approve Preview: Single DNA video approval (compact callback: "approve:<jobId>")
+          // Approve Preview: Single DNA video approval
           if (data.startsWith("approve:")) {
             const jobId = data.split(":")[1];
             await answerCallback(callbackId, "Saving video to library...");
@@ -528,7 +580,7 @@ export const Route = createFileRoute("/api/public/telegram/webhook")({
             return Response.json({ ok: true });
           }
 
-          // Approve Preview & Spawn Batch: (compact callback: "apprv_b:<jobId>")
+          // Approve Preview & Spawn Batch
           if (data.startsWith("apprv_b:")) {
             const jobId = data.split(":")[1];
             await answerCallback(callbackId, "Style approved! Generating batch...");
@@ -542,7 +594,6 @@ export const Route = createFileRoute("/api/public/telegram/webhook")({
               return Response.json({ ok: true });
             }
 
-            // 1. Save the preview video first
             const { data: recipe } = await db().from("video_recipes").select("*").eq("id", job.recipe_id).maybeSingle();
             await db().from("generated_videos").insert({
               user_id: link.user_id,
@@ -559,7 +610,6 @@ export const Route = createFileRoute("/api/public/telegram/webhook")({
             });
             await db().from("render_jobs").update({ status: "completed", completed_at: new Date().toISOString() }).eq("id", job.id);
 
-            // 2. Lookup hints for remaining variants count
             const { data: hint } = await db().from("render_job_hints").select("*").eq("recipe_id", job.recipe_id).maybeSingle();
             let batchTotal = 3;
             if (hint?.style && hint.style.includes("batch=")) {
@@ -568,7 +618,6 @@ export const Route = createFileRoute("/api/public/telegram/webhook")({
             }
             const remaining = Math.max(1, batchTotal - 1);
 
-            // 3. Fetch project hooks and clips
             const [hooksRes, clipsRes] = await Promise.all([
               db().from("hooks").select("id, text").eq("project_id", job.project_id).order("created_at", { ascending: false }),
               db().from("media_assets").select("id, dna_role").eq("project_id", job.project_id).in("dna_role", ["start", "middle", "end"]),
@@ -628,7 +677,7 @@ export const Route = createFileRoute("/api/public/telegram/webhook")({
             return Response.json({ ok: true });
           }
 
-          // Discard Preview (compact callback: "discard:<jobId>")
+          // Discard Preview
           if (data.startsWith("discard:")) {
             const jobId = data.split(":")[1];
             await answerCallback(callbackId, "Preview discarded.");
