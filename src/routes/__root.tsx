@@ -41,7 +41,7 @@ function ErrorComponent({ error, reset }: ErrorComponentProps) {
   console.error(error);
   const router = useRouter();
   useEffect(() => {
-    if (/dynamically imported module|Importing a module script failed/i.test(error?.message ?? "")) {
+    if (/dynamically imported module|Importing a module script failed/i.test(String((error as Error)?.message ?? ""))) {
       if (!sessionStorage.getItem("cf-chunk-reload")) {
         sessionStorage.setItem("cf-chunk-reload", "1");
         window.location.reload();
