@@ -88,10 +88,11 @@ export const sendTelegramNotificationFn = createServerFn({ method: "POST" })
 
 export const sendTelegramPreviewFn = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
-  .inputValidator((d: { storagePath: string; bucket?: string; caption?: string; projectId?: string; jobId?: string }) => d)
+  .inputValidator((d: { signedUrl: string; storagePath: string; caption?: string; projectId?: string; jobId?: string }) => d)
   .handler(async ({ data, context }) => {
     const { supabase, userId } = context;
     if (!data.storagePath.startsWith(`${userId}/`)) throw new Error("Invalid video path.");
+    if (!data.signedUrl.startsWith("http")) throw new Error("Invalid video URL.");
 
     const { data: link } = await supabase
       .from("telegram_links" as any)
@@ -104,14 +105,9 @@ export const sendTelegramPreviewFn = createServerFn({ method: "POST" })
       throw new Error("Telegram account is not connected.");
     }
 
-    const { data: file, error: dlErr } = await supabase.storage
-      .from(data.bucket || "renders")
-      .download(data.storagePath);
-    if (dlErr || !file) throw new Error(`Could not load video: ${dlErr?.message ?? "missing"}`);
-
-    const { sendVideoWithButtons } = await import("@/lib/telegram/bot.server");
-    const videoBuffer = Buffer.from(await file.arrayBuffer());
-
+    // Telegram streams the video directly from the signed storage URL —
+    // no server-side buffering of multi-MB files through the edge function.
+    const { tg } = await import("@/lib/telegram/bot.server");
     const replyMarkup = {
       inline_keyboard: [
         [
@@ -121,12 +117,20 @@ export const sendTelegramPreviewFn = createServerFn({ method: "POST" })
       ],
     };
 
-    await sendVideoWithButtons(
-      row.chat_id,
-      videoBuffer,
-      data.caption || "🎬 <b>Clip DNA Style Preview Ready (9:16)</b>\nReview your preview below:",
-      replyMarkup
-    );
+    const res = await tg("sendVideo", {
+      chat_id: row.chat_id,
+      video: data.signedUrl,
+      caption: data.caption || "🎬 <b>Clip DNA Style Preview Ready (9:16)</b>\nReview your preview below:",
+      parse_mode: "HTML",
+      width: 1080,
+      height: 1920,
+      supports_streaming: true,
+      reply_markup: replyMarkup,
+    });
+
+    if (!res?.ok) {
+      throw new Error(`Telegram sendVideo failed: ${JSON.stringify(res)}`);
+    }
 
     return { ok: true };
   });
