@@ -72,7 +72,6 @@ export function planStartOffsets(
     });
   }
 
-  // mode === 'uniform' (default)
   const interval = maxStart / (variantCount - 1);
   return Array.from({ length: variantCount }, (_, i) => {
     return Math.round(i * interval * 10) / 10;
@@ -87,10 +86,6 @@ interface WrappedLine {
   text: string;
   x: number;
   y: number;
-  boxX: number;
-  boxY: number;
-  boxW: number;
-  boxH: number;
 }
 
 interface OverlayLayout {
@@ -142,12 +137,7 @@ function layoutOverlay(
   canvasHeight: number,
   placement: HookPlacement = "top",
 ): OverlayLayout {
-  const maxWidth = Math.round(canvasWidth * 0.82);
-  const padX = Math.round(canvasWidth * 0.024);
-  const padY = Math.round(canvasWidth * 0.014);
-  const radius = Math.round(canvasWidth * 0.015);
-  void radius;
-
+  const maxWidth = Math.round(canvasWidth * 0.84);
   const len = rawText.length;
   let baseSize = 64;
   if (len <= 25) baseSize = 76;
@@ -167,7 +157,7 @@ function layoutOverlay(
 
   ctx.font = fontFor(fontSize);
   const lineHeight = Math.round(fontSize * 1.25);
-  const lineGap = Math.round(fontSize * 0.18);
+  const lineGap = Math.round(fontSize * 0.15);
   const totalHeight = lines.length * lineHeight + (lines.length - 1) * lineGap;
 
   let startY: number;
@@ -183,12 +173,6 @@ function layoutOverlay(
   let currentY = startY;
 
   for (const line of lines) {
-    const metrics = ctx.measureText(line);
-    const textWidth = Math.round(metrics.width);
-    const boxW = textWidth + padX * 2;
-    const boxH = lineHeight + padY * 2;
-    const boxX = Math.round((canvasWidth - boxW) / 2);
-    const boxY = currentY - padY;
     const textX = Math.round(canvasWidth / 2);
     const textY = currentY + Math.round(fontSize * 0.88);
 
@@ -196,38 +180,12 @@ function layoutOverlay(
       text: line,
       x: textX,
       y: textY,
-      boxX,
-      boxY,
-      boxW,
-      boxH,
     });
 
     currentY += lineHeight + lineGap;
   }
 
   return { lines: wrapped, fontSize };
-}
-
-function drawRoundedRect(
-  ctx: CanvasRenderingContext2D,
-  x: number,
-  y: number,
-  w: number,
-  h: number,
-  r: number,
-) {
-  const radius = Math.min(r, w / 2, h / 2);
-  ctx.beginPath();
-  ctx.moveTo(x + radius, y);
-  ctx.lineTo(x + w - radius, y);
-  ctx.quadraticCurveTo(x + w, y, x + w, y + radius);
-  ctx.lineTo(x + w, y + h - radius);
-  ctx.quadraticCurveTo(x + w, y + h, x + w - radius, y + h);
-  ctx.lineTo(x + radius, y + h);
-  ctx.quadraticCurveTo(x, y + h, x, y + h - radius);
-  ctx.lineTo(x, y + radius);
-  ctx.quadraticCurveTo(x, y, x + radius, y);
-  ctx.closePath();
 }
 
 function drawOverlay(
@@ -237,30 +195,32 @@ function drawOverlay(
 ) {
   if (!overlay.lines.length) return;
 
-  const radius = Math.round(overlay.fontSize * 0.22);
-
   ctx.save();
   ctx.font = fontString;
   ctx.textAlign = "center";
   ctx.textBaseline = "alphabetic";
+  ctx.lineJoin = "round";
+  ctx.miterLimit = 2;
+
+  const strokeWidth = Math.max(6, Math.round(overlay.fontSize * 0.16));
+
+  // 1. Thick crisp black outline with subtle shadow
+  ctx.lineWidth = strokeWidth;
+  ctx.strokeStyle = "#000000";
+  ctx.shadowColor = "rgba(0, 0, 0, 0.6)";
+  ctx.shadowBlur = Math.round(overlay.fontSize * 0.15);
+  ctx.shadowOffsetY = Math.round(overlay.fontSize * 0.05);
 
   for (const line of overlay.lines) {
-    ctx.shadowColor = "rgba(0, 0, 0, 0.45)";
-    ctx.shadowBlur = Math.round(overlay.fontSize * 0.35);
-    ctx.shadowOffsetY = Math.round(overlay.fontSize * 0.12);
-    ctx.shadowOffsetX = 0;
-
-    ctx.fillStyle = "rgba(0, 0, 0, 0.78)";
-    drawRoundedRect(ctx, line.boxX, line.boxY, line.boxW, line.boxH, radius);
-    ctx.fill();
+    ctx.strokeText(line.text, line.x, line.y);
   }
 
+  // 2. Bold white fill on top
   ctx.shadowColor = "transparent";
   ctx.shadowBlur = 0;
-  ctx.shadowOffsetX = 0;
   ctx.shadowOffsetY = 0;
-
   ctx.fillStyle = "#ffffff";
+
   for (const line of overlay.lines) {
     ctx.fillText(line.text, line.x, line.y);
   }
@@ -367,7 +327,6 @@ function waitFor(
 }
 
 async function seekVideo(video: HTMLVideoElement, targetTime: number, signal?: AbortSignal): Promise<void> {
-  // If targetTime is essentially where the video already is, resolve immediately without waiting on seeked event
   if (Math.abs(video.currentTime - targetTime) < 0.05) {
     return;
   }
@@ -397,7 +356,6 @@ async function seekVideo(video: HTMLVideoElement, targetTime: number, signal?: A
       cleanup();
       reject(new RenderCancelledError());
     };
-    // 4-second safety fallback so detached elements in Chromium never stall the pipeline
     const timer = setTimeout(() => {
       if (settled) return;
       settled = true;
@@ -476,7 +434,7 @@ export async function renderVariant(opts: BrowserRenderOptions): Promise<Browser
     try {
       ctx.drawImage(video, dx, dy, dw, dh);
     } catch {
-      // ignore empty frames during seek
+      // ignore empty frames
     }
 
     drawOverlay(ctx, overlay, drawFont);
