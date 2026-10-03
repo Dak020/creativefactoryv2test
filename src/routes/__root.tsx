@@ -41,6 +41,13 @@ function ErrorComponent({ error, reset }: ErrorComponentProps) {
   console.error(error);
   const router = useRouter();
   useEffect(() => {
+    if (/dynamically imported module|Importing a module script failed/i.test(error?.message ?? "")) {
+      if (!sessionStorage.getItem("cf-chunk-reload")) {
+        sessionStorage.setItem("cf-chunk-reload", "1");
+        window.location.reload();
+        return;
+      }
+    }
     reportLovableError(error, { boundary: "tanstack_root_error_component" });
   }, [error]);
 
@@ -117,6 +124,30 @@ function RootShell({ children }: { children: ReactNode }) {
 function RootComponent() {
   const { queryClient } = Route.useRouteContext();
   const router = useRouter();
+
+  // After a new deploy, old tabs request chunk files that no longer exist.
+  // Reload once to pick up the fresh build instead of showing a blank screen.
+  useEffect(() => {
+    const KEY = "cf-chunk-reload";
+    const reloadOnce = (e?: Event) => {
+      if (sessionStorage.getItem(KEY)) return;
+      sessionStorage.setItem(KEY, "1");
+      e?.preventDefault();
+      window.location.reload();
+    };
+    const onRejection = (e: PromiseRejectionEvent) => {
+      const msg = String((e.reason as Error)?.message ?? e.reason ?? "");
+      if (/dynamically imported module|Importing a module script failed/i.test(msg)) reloadOnce();
+    };
+    window.addEventListener("vite:preloadError", reloadOnce);
+    window.addEventListener("unhandledrejection", onRejection);
+    const t = setTimeout(() => sessionStorage.removeItem(KEY), 10000);
+    return () => {
+      clearTimeout(t);
+      window.removeEventListener("vite:preloadError", reloadOnce);
+      window.removeEventListener("unhandledrejection", onRejection);
+    };
+  }, []);
 
   useEffect(() => {
     const { data: sub } = supabase.auth.onAuthStateChange((event) => {
