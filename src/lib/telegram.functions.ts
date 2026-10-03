@@ -117,7 +117,8 @@ export const sendTelegramPreviewFn = createServerFn({ method: "POST" })
       ],
     };
 
-    const res = await tg("sendVideo", {
+    // tg() throws with the provider's error description on failure.
+    await tg("sendVideo", {
       chat_id: row.chat_id,
       video: data.signedUrl,
       caption: data.caption || "🎬 <b>Clip DNA Style Preview Ready (9:16)</b>\nReview your preview below:",
@@ -127,10 +128,6 @@ export const sendTelegramPreviewFn = createServerFn({ method: "POST" })
       supports_streaming: true,
       reply_markup: replyMarkup,
     });
-
-    if (!res?.ok) {
-      throw new Error(`Telegram sendVideo failed: ${JSON.stringify(res)}`);
-    }
 
     return { ok: true };
   });
