@@ -1,497 +1,383 @@
 import {
-  planStartOffsets,
-  RenderCancelledError,
-  type HookPlacement,
-  type SeekOptions,
-} from "./browser-render";
+  calculateFontScale,
+  computeOverlayDimensions,
+  DEFAULT_VIDEO_CONFIG,
+  type FontStyleConfig,
+  type VideoResolution,
+} from "./types";
+import { resolveAudioUrl } from "@/lib/audio-url";
 
-export { RenderCancelledError };
-export type { HookPlacement, SeekOptions };
-export { planStartOffsets };
-
-export interface SequenceSegment {
-  clipId: string;
-  url: string;
-  sourceIn: number;
-  sourceOut: number;
-  speed: number;
-  role?: "start" | "middle" | "end" | string;
-  zoom?: number;
+export interface SequenceClipItem {
+  id: string;
+  videoUrl: string;
+  targetDuration: number;
+  speedMultiplier?: number;
 }
 
 export interface SequenceRenderOptions {
-  segments: SequenceSegment[];
-  durationSeconds: number;
-  width: number;
-  height: number;
-  text: string;
-  placement?: HookPlacement;
-  fontSize?: number;
-  textColor?: string;
-  backgroundColor?: string;
-  withAudio?: boolean;
+  clips: SequenceClipItem[];
+  hookText?: string | null;
+  bodyText?: string | null;
+  ctaText?: string | null;
+  fontStyle?: FontStyleConfig;
   soundtrackUrl?: string | null;
   soundtrackVolume?: number;
-  onProgress?: (percent: number) => void;
+  resolution?: VideoResolution;
+  onProgress?: (progress: number) => void;
   signal?: AbortSignal;
 }
 
 export interface SequenceRenderResult {
   blob: Blob;
-  extension: string;
-  mimeType: string;
-  thumbnail?: Blob;
-  actualDuration: number;
+  duration: number;
+  width: number;
+  height: number;
+  format: "mp4" | "webm";
 }
 
-function fontFor(size: number) {
-  return `900 ${size}px 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif`;
-}
+const MIME_CANDIDATES = [
+  "video/mp4;codecs=avc1.42E01E,mp4a.40.2",
+  "video/mp4",
+  "video/webm;codecs=vp9,opus",
+  "video/webm;codecs=vp8,opus",
+  "video/webm",
+];
 
-interface WrappedLine {
-  text: string;
-  x: number;
-  y: number;
-}
-
-interface OverlayLayout {
-  lines: WrappedLine[];
-  fontSize: number;
+function pickSupportedMimeType(): { mimeType: string; format: "mp4" | "webm" } {
+  if (typeof MediaRecorder === "undefined") {
+    throw new Error("MediaRecorder is not supported in this browser.");
+  }
+  for (const mime of MIME_CANDIDATES) {
+    if (MediaRecorder.isTypeSupported(mime)) {
+      return {
+        mimeType: mime,
+        format: mime.startsWith("video/mp4") ? "mp4" : "webm",
+      };
+    }
+  }
+  throw new Error("No supported video MIME type found for MediaRecorder.");
 }
 
 function wrapText(
   ctx: CanvasRenderingContext2D,
   text: string,
   maxWidth: number,
-  fontSize: number,
+  maxLines = 4,
 ): string[] {
-  ctx.font = fontFor(fontSize);
   const words = text.split(/\s+/).filter(Boolean);
   const lines: string[] = [];
-  let current = "";
+  let currentLine = "";
 
   for (const word of words) {
-    const candidate = current ? `${current} ${word}` : word;
+    const candidate = currentLine ? `${currentLine} ${word}` : word;
     if (ctx.measureText(candidate).width <= maxWidth) {
-      current = candidate;
+      currentLine = candidate;
     } else {
-      if (current) lines.push(current);
-      if (ctx.measureText(word).width > maxWidth) {
-        let piece = "";
-        for (const char of word) {
-          if (ctx.measureText(piece + char).width <= maxWidth) {
-            piece += char;
-          } else {
-            if (piece) lines.push(piece);
-            piece = char;
-          }
-        }
-        current = piece;
-      } else {
-        current = word;
-      }
+      if (currentLine) lines.push(currentLine);
+      currentLine = word;
+      if (lines.length === maxLines - 1) break;
     }
   }
-  if (current) lines.push(current);
+  if (currentLine && lines.length < maxLines) {
+    lines.push(currentLine);
+  }
   return lines;
-}
-
-function layoutOverlay(
-  ctx: CanvasRenderingContext2D,
-  rawText: string,
-  canvasWidth: number,
-  canvasHeight: number,
-  placement: HookPlacement = "top",
-): OverlayLayout {
-  const maxWidth = Math.round(canvasWidth * 0.84);
-  const len = rawText.length;
-  let baseSize = 64;
-  if (len <= 25) baseSize = 76;
-  else if (len <= 45) baseSize = 68;
-  else if (len <= 80) baseSize = 58;
-  else baseSize = 50;
-
-  const scale = canvasWidth / 1080;
-  let fontSize = Math.round(baseSize * scale);
-
-  let lines: string[] = [];
-  while (fontSize > Math.round(36 * scale)) {
-    lines = wrapText(ctx, rawText, maxWidth, fontSize);
-    if (lines.length <= 4) break;
-    fontSize -= 4;
-  }
-
-  ctx.font = fontFor(fontSize);
-  const lineHeight = Math.round(fontSize * 1.25);
-  const lineGap = Math.round(fontSize * 0.15);
-  const totalHeight = lines.length * lineHeight + (lines.length - 1) * lineGap;
-
-  let startY: number;
-  if (placement === "top") {
-    startY = Math.round(canvasHeight * 0.16);
-  } else if (placement === "middle") {
-    startY = Math.round((canvasHeight - totalHeight) / 2);
-  } else {
-    startY = Math.round(canvasHeight * 0.72 - totalHeight);
-  }
-
-  const wrapped: WrappedLine[] = [];
-  let currentY = startY;
-
-  for (const line of lines) {
-    const textX = Math.round(canvasWidth / 2);
-    const textY = currentY + Math.round(fontSize * 0.88);
-
-    wrapped.push({
-      text: line,
-      x: textX,
-      y: textY,
-    });
-
-    currentY += lineHeight + lineGap;
-  }
-
-  return { lines: wrapped, fontSize };
 }
 
 function drawOverlay(
   ctx: CanvasRenderingContext2D,
-  overlay: OverlayLayout,
-  fontString: string,
+  text: string,
+  opts: {
+    currentTime: number;
+    totalDuration: number;
+    canvasWidth: number;
+    canvasHeight: number;
+    fontStyle?: FontStyleConfig;
+    role: "hook" | "body" | "cta";
+  },
 ) {
-  if (!overlay.lines.length) return;
+  const { currentTime, totalDuration, canvasWidth, canvasHeight, fontStyle, role } = opts;
+  const config = fontStyle || {};
+
+  let startTime = 0;
+  let endTime = totalDuration;
+
+  if (role === "hook") {
+    startTime = 0;
+    endTime = Math.min(totalDuration, config.hookDuration ?? DEFAULT_VIDEO_CONFIG.hookDuration);
+  } else if (role === "body") {
+    startTime = config.hookDuration ?? DEFAULT_VIDEO_CONFIG.hookDuration;
+    endTime = Math.max(startTime, totalDuration - (config.ctaDuration ?? DEFAULT_VIDEO_CONFIG.ctaDuration));
+  } else if (role === "cta") {
+    endTime = totalDuration;
+    startTime = Math.max(0, totalDuration - (config.ctaDuration ?? DEFAULT_VIDEO_CONFIG.ctaDuration));
+  }
+
+  if (currentTime < startTime || currentTime > endTime) return;
+
+  const { maxWidth, paddingHorizontal } = computeOverlayDimensions(canvasWidth, canvasHeight);
+  const scale = calculateFontScale(canvasWidth, canvasHeight);
+
+  const rawSize =
+    role === "hook"
+      ? config.fontSizeHook ?? 54
+      : role === "cta"
+      ? config.fontSizeCta ?? 44
+      : config.fontSizeBody ?? 38;
+
+  const fontSize = Math.round(rawSize * scale);
+  const lineHeight = Math.round(fontSize * 1.2);
+  const fontFamily = config.fontFamily || "Inter, -apple-system, sans-serif";
+  const fontWeight = config.fontWeight || "800";
+  const textColor = config.textColor || "#FFFFFF";
+  const strokeColor = config.strokeColor || "#000000";
+  const strokeWidth = Math.round(Math.max(2, fontSize * 0.12));
+  const textTransform = config.textTransform || (role === "hook" ? "uppercase" : "none");
+  const position = config.position || "middle";
 
   ctx.save();
-  ctx.font = fontString;
+  ctx.font = `${fontWeight} ${fontSize}px ${fontFamily}`;
   ctx.textAlign = "center";
-  ctx.textBaseline = "alphabetic";
-  ctx.lineJoin = "round";
-  ctx.miterLimit = 2;
+  ctx.textBaseline = "middle";
 
-  const strokeWidth = Math.max(6, Math.round(overlay.fontSize * 0.16));
+  let displayText = text;
+  if (textTransform === "uppercase") displayText = text.toUpperCase();
+  else if (textTransform === "lowercase") displayText = text.toLowerCase();
 
-  // 1. Thick crisp black outline with subtle shadow
-  ctx.lineWidth = strokeWidth;
-  ctx.strokeStyle = "#000000";
-  ctx.shadowColor = "rgba(0, 0, 0, 0.6)";
-  ctx.shadowBlur = Math.round(overlay.fontSize * 0.15);
-  ctx.shadowOffsetY = Math.round(overlay.fontSize * 0.05);
-
-  for (const line of overlay.lines) {
-    ctx.strokeText(line.text, line.x, line.y);
+  const lines = wrapText(ctx, displayText, maxWidth, role === "hook" ? 3 : 4);
+  if (lines.length === 0) {
+    ctx.restore();
+    return;
   }
 
-  // 2. Bold white fill on top
-  ctx.shadowColor = "transparent";
-  ctx.shadowBlur = 0;
-  ctx.shadowOffsetY = 0;
-  ctx.fillStyle = "#ffffff";
+  const totalTextHeight = lines.length * lineHeight;
+  let blockCenterY: number;
 
-  for (const line of overlay.lines) {
-    ctx.fillText(line.text, line.x, line.y);
+  switch (position) {
+    case "top":
+      blockCenterY = canvasHeight * 0.22;
+      break;
+    case "bottom":
+      blockCenterY = canvasHeight * 0.78;
+      break;
+    case "middle":
+    default:
+      blockCenterY = canvasHeight * 0.45;
+      break;
   }
+
+  const firstLineY = blockCenterY - totalTextHeight / 2 + lineHeight / 2;
+  const centerX = canvasWidth / 2;
+
+  lines.forEach((line, index) => {
+    const y = firstLineY + index * lineHeight;
+
+    ctx.lineJoin = "round";
+    ctx.miterLimit = 2;
+    ctx.strokeStyle = strokeColor;
+    ctx.lineWidth = strokeWidth;
+    ctx.strokeText(line, centerX, y);
+
+    ctx.fillStyle = textColor;
+    ctx.fillText(line, centerX, y);
+  });
 
   ctx.restore();
-}
-
-function pickSupportedMimeType(): string {
-  if (typeof MediaRecorder === "undefined") {
-    return "video/webm";
-  }
-  const candidates = [
-    "video/mp4;codecs=avc1.42E01E,mp4a.40.2",
-    "video/mp4",
-    "video/webm;codecs=h264,opus",
-    "video/webm;codecs=vp9,opus",
-    "video/webm;codecs=vp8,opus",
-    "video/webm",
-  ];
-  for (const c of candidates) {
-    if (MediaRecorder.isTypeSupported(c)) return c;
-  }
-  return "video/webm";
-}
-
-export function throwIfAborted(signal?: AbortSignal) {
-  if (signal?.aborted) throw new RenderCancelledError();
-}
-
-function waitFor(
-  el: HTMLMediaElement,
-  event: string,
-  opts?: { signal?: AbortSignal | undefined; timeoutMs?: number },
-) {
-  return new Promise<void>((resolve, reject) => {
-    let settled = false;
-
-    const cleanup = () => {
-      clearTimeout(timeout);
-      el.removeEventListener(event, ok);
-      el.removeEventListener("error", fail);
-      opts?.signal?.removeEventListener("abort", onAbort);
-    };
-
-    const ok = () => {
-      if (settled) return;
-      settled = true;
-      cleanup();
-      resolve();
-    };
-
-    const fail = () => {
-      if (settled) return;
-      settled = true;
-      cleanup();
-      const errCode = el.error
-        ? ` (code ${el.error.code}: ${el.error.message || "media decode error"})`
-        : "";
-      reject(new Error(`Video failed to ${event}${errCode}. Check clip format or CORS permissions.`));
-    };
-
-    const onAbort = () => {
-      if (settled) return;
-      settled = true;
-      cleanup();
-      reject(new RenderCancelledError());
-    };
-
-    const timeout = setTimeout(() => {
-      if (settled) return;
-      settled = true;
-      cleanup();
-      const errDetail = el.error
-        ? ` (media error code ${el.error.code}: ${el.error.message})`
-        : ` (readyState: ${el.readyState}, networkState: ${el.networkState})`;
-      reject(new Error(`Timed out waiting for the clip to ${event}${errDetail}. Verify the video codec is H.264 MP4.`));
-    }, opts?.timeoutMs ?? 45_000);
-
-    if (opts?.signal?.aborted) {
-      onAbort();
-      return;
-    }
-
-    if (
-      (event === "loadedmetadata" && el.readyState >= 1) ||
-      (event === "loadeddata" && el.readyState >= 2) ||
-      (event === "canplay" && el.readyState >= 3) ||
-      (event === "seeked" && !("seeking" in el && (el as HTMLVideoElement).seeking) && el.readyState >= 2)
-    ) {
-      ok();
-      return;
-    }
-
-    el.addEventListener(event, ok, { once: true });
-    el.addEventListener("error", fail, { once: true });
-    opts?.signal?.addEventListener("abort", onAbort, { once: true });
-
-    try {
-      el.load();
-    } catch {
-      /* ignore */
-    }
-  });
-}
-
-interface PreparedSegment {
-  video: HTMLVideoElement;
-  sourceStart: number;
-  sourceEnd: number;
-  outputDuration: number;
-  speed: number;
-  zoom: number;
 }
 
 async function seekVideo(video: HTMLVideoElement, targetTime: number, signal?: AbortSignal): Promise<void> {
   if (Math.abs(video.currentTime - targetTime) < 0.05) {
     return;
   }
+
   return new Promise<void>((resolve, reject) => {
-    let settled = false;
+    let timeout: any = null;
+
     const cleanup = () => {
-      clearTimeout(timer);
       video.removeEventListener("seeked", onSeeked);
       video.removeEventListener("error", onError);
-      signal?.removeEventListener("abort", onAbort);
+      if (timeout) clearTimeout(timeout);
     };
+
     const onSeeked = () => {
-      if (settled) return;
-      settled = true;
       cleanup();
       resolve();
     };
+
     const onError = () => {
-      if (settled) return;
-      settled = true;
       cleanup();
-      resolve();
+      reject(new Error(`Video seek error at target time ${targetTime}`));
     };
-    const onAbort = () => {
-      if (settled) return;
-      settled = true;
-      cleanup();
-      reject(new RenderCancelledError());
-    };
-    const timer = setTimeout(() => {
-      if (settled) return;
-      settled = true;
+
+    video.addEventListener("seeked", onSeeked, { once: true });
+    video.addEventListener("error", onError, { once: true });
+
+    timeout = setTimeout(() => {
       cleanup();
       resolve();
     }, 4000);
 
-    video.addEventListener("seeked", onSeeked, { once: true });
-    video.addEventListener("error", onError, { once: true });
-    signal?.addEventListener("abort", onAbort, { once: true });
+    if (signal?.aborted) {
+      cleanup();
+      reject(new DOMException("Aborted", "AbortError"));
+      return;
+    }
 
     try {
       video.currentTime = targetTime;
-    } catch {
+    } catch (err) {
       cleanup();
-      resolve();
+      reject(err);
     }
   });
 }
 
-async function prepareVideo(seg: SequenceSegment, withAudio: boolean, signal?: AbortSignal): Promise<PreparedSegment> {
-  const video = document.createElement("video");
-  video.crossOrigin = "anonymous";
-  video.muted = !withAudio;
-  video.volume = 1;
-  video.playsInline = true;
-  video.preload = "auto";
-  video.src = seg.url;
-  try {
-    video.load();
-  } catch {
-    /* ignore */
-  }
-
-  try {
-    await waitFor(video, "loadedmetadata", { signal });
-    const realDuration = Number.isFinite(video.duration) ? video.duration : seg.sourceOut;
-    const start = Math.max(0, Math.min(seg.sourceIn, Math.max(0, realDuration - 0.05)));
-    
-    await seekVideo(video, start, signal);
-
-    const rate = Math.max(0.25, Math.min(4, seg.speed || 1));
-    video.playbackRate = rate;
-    const end = Math.max(start + 0.05, Math.min(seg.sourceOut, realDuration));
-    const outputDuration = Math.max(0.2, (end - start) / rate);
-
-    return {
-      video,
-      sourceStart: start,
-      sourceEnd: end,
-      outputDuration,
-      speed: rate,
-      zoom: seg.zoom ?? 1,
-    };
-  } catch (err) {
-    try {
-      video.pause();
-      video.src = "";
-    } catch {
-      /* ignore */
+function waitFor(
+  target: EventTarget,
+  event: string,
+  timeoutMs = 15000,
+  signal?: AbortSignal,
+): Promise<void> {
+  return new Promise((resolve, reject) => {
+    if (signal?.aborted) {
+      reject(new DOMException("Aborted", "AbortError"));
+      return;
     }
-    throw err;
-  }
+    let timeout: any = null;
+    const cleanup = () => {
+      target.removeEventListener(event, onEvent);
+      target.removeEventListener("error", onError);
+      if (signal) signal.removeEventListener("abort", onAbort);
+      if (timeout) clearTimeout(timeout);
+    };
+    const onEvent = () => {
+      cleanup();
+      resolve();
+    };
+    const onError = (e: any) => {
+      cleanup();
+      let detail = "Media element error";
+      if (target instanceof HTMLVideoElement && target.error) {
+        detail = `${detail} (code ${target.error.code}: ${target.error.message || "playback failed"})`;
+      }
+      reject(new Error(detail));
+    };
+    const onAbort = () => {
+      cleanup();
+      reject(new DOMException("Aborted", "AbortError"));
+    };
+    target.addEventListener(event, onEvent, { once: true });
+    target.addEventListener("error", onError, { once: true });
+    if (signal) {
+      signal.addEventListener("abort", onAbort, { once: true });
+    }
+    timeout = setTimeout(() => {
+      cleanup();
+      let state = "";
+      if (target instanceof HTMLVideoElement) {
+        state = ` (readyState: ${target.readyState}, networkState: ${target.networkState})`;
+      }
+      reject(new Error(`Timed out waiting for ${event}${state}. Verify video codec is H.264 MP4.`));
+    }, timeoutMs);
+  });
+}
+
+interface LoadedClip {
+  video: HTMLVideoElement;
+  duration: number;
 }
 
 export async function renderSequence(opts: SequenceRenderOptions): Promise<SequenceRenderResult> {
-  const { segments, width, height, text, withAudio, soundtrackUrl, signal } = opts;
-  throwIfAborted(signal);
+  const {
+    clips,
+    hookText,
+    bodyText,
+    ctaText,
+    fontStyle,
+    soundtrackVolume = 1,
+    resolution = { width: 1080, height: 1920, fps: 30, bitrate: 8_000_000 },
+    onProgress,
+    signal,
+  } = opts;
 
-  if (!segments.length) {
-    throw new Error("Cannot render an empty sequence: 0 segments provided.");
+  if (!clips || clips.length === 0) {
+    throw new Error("No clips provided to sequence renderer.");
   }
 
-  try {
-    if (typeof document !== "undefined" && "fonts" in document) {
-      await document.fonts.load(fontFor(64));
-      await document.fonts.ready;
+  let soundtrackUrl: string | null = null;
+  if (opts.soundtrackUrl) {
+    try {
+      soundtrackUrl = await resolveAudioUrl(opts.soundtrackUrl);
+    } catch (e) {
+      console.warn("Failed to resolve sequence soundtrack URL, proceeding without:", e);
     }
-  } catch {
-    /* fallback cleanly */
   }
 
-  const prepared: PreparedSegment[] = [];
-  for (const seg of segments) {
-    throwIfAborted(signal);
-    const p = await prepareVideo(seg, withAudio ?? false, signal);
-    prepared.push(p);
-  }
+  const { mimeType, format } = pickSupportedMimeType();
 
-  const plannedTotal = prepared.reduce((sum, p) => sum + p.outputDuration, 0);
-  const targetDuration = Math.max(1, opts.durationSeconds || plannedTotal);
-  const totalDuration = Math.min(plannedTotal, targetDuration);
-
-  const canvas = document.createElement("canvas");
-  canvas.width = width;
-  canvas.height = height;
-  const ctx = canvas.getContext("2d");
-  if (!ctx) {
-    prepared.forEach((p) => {
-      p.video.src = "";
-    });
-    throw new Error("Canvas 2D context is not available.");
-  }
-
-  const overlay = layoutOverlay(ctx, text.trim() || "…", width, height, opts.placement ?? "top");
-  const drawFont = fontFor(overlay.fontSize);
-
-  const drawCurrentFrame = (currentSeg: PreparedSegment) => {
-    const v = currentSeg.video;
-    const vw = v.videoWidth || width;
-    const vh = v.videoHeight || height;
-
-    const baseScale = Math.max(width / vw, height / vh);
-    const zoomScale = baseScale * (currentSeg.zoom || 1);
-    const dw = vw * zoomScale;
-    const dh = vh * zoomScale;
-    const dx = (width - dw) / 2;
-    const dy = (height - dh) / 2;
-
-    ctx.fillStyle = "#000000";
-    ctx.fillRect(0, 0, width, height);
+  const loadedClips: LoadedClip[] = [];
+  for (const item of clips) {
+    const v = document.createElement("video");
+    v.crossOrigin = "anonymous";
+    v.playsInline = true;
+    v.preload = "auto";
+    v.src = item.videoUrl;
 
     try {
-      ctx.drawImage(v, dx, dy, dw, dh);
+      v.load();
     } catch {
-      /* ignore empty frame */
+      /* ignore */
     }
 
-    drawOverlay(ctx, overlay, drawFont);
-  };
+    await waitFor(v, "loadedmetadata", 30000, signal);
 
-  drawCurrentFrame(prepared[0]!);
+    const naturalDur = v.duration || 4;
+    const speed = Math.max(0.25, Math.min(4, item.speedMultiplier ?? 1));
+    v.playbackRate = speed;
 
-  const thumbnail: Blob | undefined = await new Promise((res) => {
-    canvas.toBlob((b) => res(b ?? undefined), "image/jpeg", 0.85);
-  });
+    const clipDur = Math.min(item.targetDuration, naturalDur / speed);
+    loadedClips.push({
+      video: v,
+      duration: Math.max(0.5, clipDur),
+    });
+  }
 
-  const fps = 30;
-  const canvasStream = canvas.captureStream(fps);
+  const totalDuration = loadedClips.reduce((sum, c) => sum + c.duration, 0);
 
-  let audioCtx: AudioContext | null = null;
+  const canvas = document.createElement("canvas");
+  canvas.width = resolution.width;
+  canvas.height = resolution.height;
+  const ctx = canvas.getContext("2d", { alpha: false, desynchronized: true });
+  if (!ctx) throw new Error("Could not acquire 2D canvas context.");
+
+  const canvasStream = canvas.captureStream ? canvas.captureStream(resolution.fps) : null;
+  if (!canvasStream) throw new Error("captureStream not supported.");
+
   let soundtrackElement: HTMLAudioElement | null = null;
+  let audioCtx: AudioContext | null = null;
   const audioTracks: MediaStreamTrack[] = [];
 
   const cleanupAudio = () => {
-    try {
-      soundtrackElement?.pause();
-      if (soundtrackElement) soundtrackElement.src = "";
-    } catch {
-      /* ignore */
-    }
-    try {
-      if (audioCtx && audioCtx.state !== "closed") {
-        void audioCtx.close();
+    if (soundtrackElement) {
+      try {
+        soundtrackElement.pause();
+        soundtrackElement.src = "";
+      } catch {
+        /* ignore */
       }
-    } catch {
-      /* ignore */
+      soundtrackElement = null;
+    }
+    if (audioCtx && audioCtx.state !== "closed") {
+      void audioCtx.close();
+      audioCtx = null;
     }
   };
 
   try {
+    for (const active of loadedClips) {
+      active.video.muted = true;
+    }
+
     const AudioContextClass =
       window.AudioContext ||
       (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
@@ -536,23 +422,20 @@ export async function renderSequence(opts: SequenceRenderOptions): Promise<Seque
       audio.currentTime = 0;
       const trackSource = audioCtx.createMediaElementSource(audio);
       trackSource.connect(dest);
-      trackSource.connect(audioCtx.destination);
       dest.stream.getAudioTracks().forEach((t) => audioTracks.push(t));
     }
   } catch (err) {
     console.warn("Sequence audio setup failed:", err);
   }
 
-  const combinedStream = new MediaStream([
+  const stream = new MediaStream([
     ...canvasStream.getVideoTracks(),
     ...audioTracks,
   ]);
 
-  const mimeType = pickSupportedMimeType();
-  const extension = mimeType.includes("mp4") ? "mp4" : "webm";
-  const recorder = new MediaRecorder(combinedStream, {
+  const recorder = new MediaRecorder(stream, {
     mimeType,
-    videoBitsPerSecond: 6_000_000,
+    videoBitsPerSecond: resolution.bitrate,
   });
 
   const chunks: Blob[] = [];
@@ -560,131 +443,145 @@ export async function renderSequence(opts: SequenceRenderOptions): Promise<Seque
     if (e.data && e.data.size > 0) chunks.push(e.data);
   };
 
-  const intervalMs = 1000 / fps;
-
   return new Promise<SequenceRenderResult>((resolve, reject) => {
-    let timer: number | null = null;
-    let stopped = false;
-    let segIdx = 0;
-    let segStartWallTime = 0;
-    let totalElapsedWallTime = 0;
+    let animId: number | null = null;
+    let startTime = 0;
+    let isFinished = false;
+    let currentClipIndex = 0;
+    let clipStartElapsed = 0;
 
     const stop = (err?: Error) => {
-      if (stopped) return;
-      stopped = true;
-      if (timer !== null) clearInterval(timer);
-
-      prepared.forEach((p) => {
+      if (isFinished) return;
+      isFinished = true;
+      if (animId !== null) cancelAnimationFrame(animId);
+      loadedClips.forEach((c) => {
         try {
-          p.video.pause();
-          p.video.src = "";
+          c.video.pause();
         } catch {
           /* ignore */
         }
       });
       cleanupAudio();
+      if (recorder.state !== "inactive") recorder.stop();
+      if (err) reject(err);
+    };
 
-      if (recorder.state !== "inactive") {
-        recorder.onstop = () => {
-          if (err) {
-            reject(err);
-          } else {
-            const blob = new Blob(chunks, { type: mimeType });
-            resolve({ blob, extension, mimeType, thumbnail, actualDuration: totalElapsedWallTime });
-          }
-        };
-        try {
-          recorder.stop();
-        } catch (recStopErr) {
-          if (err) reject(err);
-          else reject(recStopErr as Error);
-        }
-      } else if (err) {
-        reject(err);
-      } else {
+    if (signal) {
+      signal.addEventListener(
+        "abort",
+        () => stop(new DOMException("Aborted", "AbortError")),
+        { once: true },
+      );
+    }
+
+    recorder.onerror = (e: any) => stop(new Error(`Recorder: ${e?.error?.message || "fail"}`));
+    recorder.onstop = () => {
+      try {
         const blob = new Blob(chunks, { type: mimeType });
-        resolve({ blob, extension, mimeType, thumbnail, actualDuration: totalElapsedWallTime });
+        resolve({
+          blob,
+          duration: totalDuration,
+          width: resolution.width,
+          height: resolution.height,
+          format,
+        });
+      } catch (e) {
+        reject(e as Error);
       }
     };
 
-    recorder.onerror = () => stop(new Error("MediaRecorder encountered an error."));
+    const drawFrame = () => {
+      if (isFinished) return;
+      const now = performance.now();
+      const elapsed = (now - startTime) / 1000;
 
-    if (signal) {
-      if (signal.aborted) {
-        stop(new RenderCancelledError());
+      if (elapsed >= totalDuration) {
+        stop();
         return;
       }
-      signal.addEventListener("abort", () => stop(new RenderCancelledError()), { once: true });
-    }
+
+      let active = loadedClips[currentClipIndex];
+      const clipElapsed = elapsed - clipStartElapsed;
+
+      if (clipElapsed >= active.duration && currentClipIndex < loadedClips.length - 1) {
+        try {
+          active.video.pause();
+        } catch {
+          /* ignore */
+        }
+        currentClipIndex++;
+        clipStartElapsed = elapsed;
+        active = loadedClips[currentClipIndex];
+        void seekVideo(active.video, 0, signal);
+        active.video.play().catch((e) => stop(e as Error));
+      }
+
+      const vw = active.video.videoWidth || resolution.width;
+      const vh = active.video.videoHeight || resolution.height;
+      const scale = Math.max(resolution.width / vw, resolution.height / vh);
+      const drawW = vw * scale;
+      const drawH = vh * scale;
+      const offsetX = (resolution.width - drawW) / 2;
+      const offsetY = (resolution.height - drawH) / 2;
+
+      ctx.drawImage(active.video, offsetX, offsetY, drawW, drawH);
+
+      if (hookText) {
+        drawOverlay(ctx, hookText, {
+          currentTime: elapsed,
+          totalDuration,
+          canvasWidth: resolution.width,
+          canvasHeight: resolution.height,
+          fontStyle,
+          role: "hook",
+        });
+      }
+      if (bodyText) {
+        drawOverlay(ctx, bodyText, {
+          currentTime: elapsed,
+          totalDuration,
+          canvasWidth: resolution.width,
+          canvasHeight: resolution.height,
+          fontStyle,
+          role: "body",
+        });
+      }
+      if (ctaText) {
+        drawOverlay(ctx, ctaText, {
+          currentTime: elapsed,
+          totalDuration,
+          canvasWidth: resolution.width,
+          canvasHeight: resolution.height,
+          fontStyle,
+          role: "cta",
+        });
+      }
+
+      if (onProgress) onProgress(Math.min(0.99, elapsed / totalDuration));
+
+      animId = requestAnimationFrame(drawFrame);
+    };
 
     try {
       recorder.start(100);
-    } catch (e) {
-      stop(e as Error);
+      startTime = performance.now();
+    } catch (recErr) {
+      stop(recErr as Error);
       return;
     }
 
     if (audioCtx && audioCtx.state === "suspended") {
       void audioCtx.resume();
     }
+
     if (soundtrackElement) {
       soundtrackElement.currentTime = 0;
       void soundtrackElement.play().catch(() => {});
     }
 
-    let active = prepared[0]!;
-    active.video.currentTime = active.sourceStart;
-    active.video.playbackRate = active.speed;
+    void seekVideo(loadedClips[0].video, 0, signal);
+    const active = loadedClips[0];
     active.video.play().catch((e) => stop(e as Error));
-
-    segStartWallTime = performance.now();
-    const renderStartWallTime = segStartWallTime;
-
-    timer = window.setInterval(() => {
-      if (signal?.aborted) {
-        stop(new RenderCancelledError());
-        return;
-      }
-
-      const now = performance.now();
-      totalElapsedWallTime = (now - renderStartWallTime) / 1000;
-      const segElapsed = (now - segStartWallTime) / 1000;
-
-      drawCurrentFrame(active);
-
-      const progress = Math.min(100, Math.round((totalElapsedWallTime / totalDuration) * 100));
-      opts.onProgress?.(progress);
-
-      const hitDuration = totalElapsedWallTime >= totalDuration;
-      const segFinished =
-        segElapsed >= active.outputDuration ||
-        active.video.currentTime >= active.sourceEnd ||
-        active.video.ended;
-
-      if (hitDuration) {
-        stop();
-        return;
-      }
-
-      if (segFinished) {
-        try {
-          active.video.pause();
-        } catch {
-          /* ignore */
-        }
-
-        segIdx++;
-        if (segIdx >= prepared.length) {
-          stop();
-          return;
-        }
-
-        active = prepared[segIdx]!;
-        active.video.currentTime = active.sourceStart;
-        active.video.playbackRate = active.speed;
-        segStartWallTime = performance.now();
-        active.video.play().catch((e) => stop(e as Error));
-      }
-    }, intervalMs);
+    animId = requestAnimationFrame(drawFrame);
   });
 }
