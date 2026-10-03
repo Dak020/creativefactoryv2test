@@ -80,9 +80,6 @@ export function planStartOffsets(
 }
 
 function fontFor(size: number) {
-  // Use Inter explicitly; index.html pulls it from Google Fonts with 900
-  // weight. If the font fails to load or hasn't loaded yet, fall through to
-  // system sans-serif. The 900 weight matches the TikTok / Reels hook style.
   return `900 ${size}px 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif`;
 }
 
@@ -118,7 +115,6 @@ function wrapText(
       current = candidate;
     } else {
       if (current) lines.push(current);
-      // Hard break a single word that exceeds maxWidth on its own
       if (ctx.measureText(word).width > maxWidth) {
         let piece = "";
         for (const char of word) {
@@ -146,20 +142,12 @@ function layoutOverlay(
   canvasHeight: number,
   placement: HookPlacement = "top",
 ): OverlayLayout {
-  // TikTok safe zones:
-  // - top header (LIVE, Following, For You, Search) occupies ~12-14% of height
-  // - bottom controls (account, caption, sound, tabs) occupy ~22-26%
-  // - right action rail (like, comment, bookmark, share) occupies ~12-14% of width
-  // Keeping hooks centered with side margins of 10% prevents clipping on
-  // both standard and folded devices.
   const maxWidth = Math.round(canvasWidth * 0.82);
   const padX = Math.round(canvasWidth * 0.024);
   const padY = Math.round(canvasWidth * 0.014);
   const radius = Math.round(canvasWidth * 0.015);
   void radius;
 
-  // Font size hierarchy: short hooks (<35 chars) should feel like a billboard;
-  // longer hooks step down so they fit in 3-4 lines max.
   const len = rawText.length;
   let baseSize = 64;
   if (len <= 25) baseSize = 76;
@@ -167,12 +155,10 @@ function layoutOverlay(
   else if (len <= 80) baseSize = 58;
   else baseSize = 50;
 
-  // Scale with resolution (design target is 1080x1920)
   const scale = canvasWidth / 1080;
   let fontSize = Math.round(baseSize * scale);
 
   let lines: string[] = [];
-  // Ensure hook fits in at most 4 lines without overflowing height
   while (fontSize > Math.round(36 * scale)) {
     lines = wrapText(ctx, rawText, maxWidth, fontSize);
     if (lines.length <= 4) break;
@@ -184,15 +170,12 @@ function layoutOverlay(
   const lineGap = Math.round(fontSize * 0.18);
   const totalHeight = lines.length * lineHeight + (lines.length - 1) * lineGap;
 
-  // Anchor Y by placement
   let startY: number;
   if (placement === "top") {
-    // 16% from top sits comfortably below the TikTok search/tab bar
     startY = Math.round(canvasHeight * 0.16);
   } else if (placement === "middle") {
     startY = Math.round((canvasHeight - totalHeight) / 2);
   } else {
-    // 28% from bottom stays clear of the creator name, caption, and sound pill
     startY = Math.round(canvasHeight * 0.72 - totalHeight);
   }
 
@@ -207,7 +190,6 @@ function layoutOverlay(
     const boxX = Math.round((canvasWidth - boxW) / 2);
     const boxY = currentY - padY;
     const textX = Math.round(canvasWidth / 2);
-    // Baseline roughly at 78% of line height for bold sans
     const textY = currentY + Math.round(fontSize * 0.88);
 
     wrapped.push({
@@ -262,9 +244,7 @@ function drawOverlay(
   ctx.textAlign = "center";
   ctx.textBaseline = "alphabetic";
 
-  // First pass: backdrop pills behind every line
   for (const line of overlay.lines) {
-    // Subtle drop shadow under the pill for separation on bright footage
     ctx.shadowColor = "rgba(0, 0, 0, 0.45)";
     ctx.shadowBlur = Math.round(overlay.fontSize * 0.35);
     ctx.shadowOffsetY = Math.round(overlay.fontSize * 0.12);
@@ -275,13 +255,11 @@ function drawOverlay(
     ctx.fill();
   }
 
-  // Turn off shadow before drawing text so the white stays crisp
   ctx.shadowColor = "transparent";
   ctx.shadowBlur = 0;
   ctx.shadowOffsetX = 0;
   ctx.shadowOffsetY = 0;
 
-  // Second pass: pure white text centered in each pill
   ctx.fillStyle = "#ffffff";
   for (const line of overlay.lines) {
     ctx.fillText(line.text, line.x, line.y);
@@ -380,11 +358,62 @@ function waitFor(
     el.addEventListener("error", fail, { once: true });
     opts?.signal?.addEventListener("abort", onAbort, { once: true });
 
-    // Explicitly force buffering/decoding on detached DOM video elements
     try {
       el.load();
     } catch {
       /* ignore */
+    }
+  });
+}
+
+async function seekVideo(video: HTMLVideoElement, targetTime: number, signal?: AbortSignal): Promise<void> {
+  // If targetTime is essentially where the video already is, resolve immediately without waiting on seeked event
+  if (Math.abs(video.currentTime - targetTime) < 0.05) {
+    return;
+  }
+  return new Promise<void>((resolve, reject) => {
+    let settled = false;
+    const cleanup = () => {
+      clearTimeout(timer);
+      video.removeEventListener("seeked", onSeeked);
+      video.removeEventListener("error", onError);
+      signal?.removeEventListener("abort", onAbort);
+    };
+    const onSeeked = () => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      resolve();
+    };
+    const onError = () => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      resolve();
+    };
+    const onAbort = () => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      reject(new RenderCancelledError());
+    };
+    // 4-second safety fallback so detached elements in Chromium never stall the pipeline
+    const timer = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      resolve();
+    }, 4000);
+
+    video.addEventListener("seeked", onSeeked, { once: true });
+    video.addEventListener("error", onError, { once: true });
+    signal?.addEventListener("abort", onAbort, { once: true });
+
+    try {
+      video.currentTime = targetTime;
+    } catch {
+      cleanup();
+      resolve();
     }
   });
 }
@@ -399,7 +428,7 @@ export async function renderVariant(opts: BrowserRenderOptions): Promise<Browser
       await document.fonts.ready;
     }
   } catch {
-    // If font loading APIs aren't available, fall back cleanly
+    /* fallback cleanly */
   }
 
   const video = document.createElement("video");
@@ -421,8 +450,7 @@ export async function renderVariant(opts: BrowserRenderOptions): Promise<Browser
   const maxStart = Math.max(0, sourceDuration - durationSeconds);
   const start = Math.min(Math.max(0, opts.startSeconds), maxStart);
 
-  video.currentTime = start;
-  await waitFor(video, "seeked", { signal });
+  await seekVideo(video, start, signal);
 
   const canvas = document.createElement("canvas");
   canvas.width = width;
