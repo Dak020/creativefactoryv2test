@@ -677,6 +677,50 @@ export type Database = {
           },
         ]
       }
+      render_job_hints: {
+        Row: {
+          audio_label: string | null
+          clip_ids: string[]
+          created_at: string
+          id: string
+          recipe_id: string
+          soundtrack_url: string | null
+          style: string
+          user_id: string
+          with_audio: boolean
+        }
+        Insert: {
+          audio_label?: string | null
+          clip_ids?: string[]
+          created_at?: string
+          id?: string
+          recipe_id: string
+          soundtrack_url?: string | null
+          style?: string
+          user_id: string
+          with_audio?: boolean
+        }
+        Update: {
+          audio_label?: string | null
+          clip_ids?: string[]
+          created_at?: string
+          id?: string
+          recipe_id?: string
+          soundtrack_url?: string | null
+          style?: string
+          user_id?: string
+          with_audio?: boolean
+        }
+        Relationships: [
+          {
+            foreignKeyName: "render_job_hints_recipe_id_fkey"
+            columns: ["recipe_id"]
+            isOneToOne: false
+            referencedRelation: "video_recipes"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       render_jobs: {
         Row: {
           completed_at: string | null
