@@ -296,10 +296,10 @@ export function RenderWorker() {
 
           // Send 9:16 preview with inline Approve & Discard buttons
           try {
-            const base64Video = await blobToBase64(blob);
             await sendTelegramPreviewFn({
               data: {
-                base64Video,
+                storagePath: outPath,
+                bucket: RENDER_BUCKET,
                 caption: `🎬 <b>Clip DNA Preview (9:16)</b>\n\n• <b>Hook:</b> "${recipe.overlay_text}"\n• <b>Duration:</b> ${targetDuration}s\n\nApprove below to save to your project library:`,
                 projectId: job.project_id,
                 jobId: job.id,
