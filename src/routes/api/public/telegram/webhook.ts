@@ -312,11 +312,13 @@ export const Route = createFileRoute("/api/public/telegram/webhook")({
             let libraryTracks: { id: string; name: string }[] = [];
             if (link?.user_id) {
               const { data: tracks } = await db()
-                .from("soundtrack_tracks")
-                .select("id, name")
+                .from("trending_audios")
+                .select("id, title")
                 .eq("user_id", link.user_id)
+                .not("storage_path", "is", null)
+                .order("created_at", { ascending: false })
                 .limit(3);
-              libraryTracks = tracks || [];
+              libraryTracks = (tracks || []).map((t) => ({ id: t.id, name: t.title }));
             }
 
             const prefix = `do_rend:${parts[1]}:${duration}:${batch}:${projectId}`;
@@ -366,20 +368,29 @@ export const Route = createFileRoute("/api/public/telegram/webhook")({
             const [projRes, hooksRes, clipsRes] = await Promise.all([
               db().from("projects").select("name").eq("id", projectId).maybeSingle(),
               db().from("hooks").select("id, text").eq("project_id", projectId).order("created_at", { ascending: false }),
-              db().from("media_assets").select("id, file_path, dna_role").eq("project_id", projectId),
+              db().from("media_assets").select("id, dna_role").eq("project_id", projectId).order("created_at", { ascending: false }),
             ]);
 
             const projectName = projRes.data?.name || "Project";
             const hooks = hooksRes.data || [];
-            const clips = clipsRes.data || [];
+            const allClips = clipsRes.data || [];
+            const dnaClips = allClips.filter((c) => c.dna_role === "start" || c.dna_role === "middle" || c.dna_role === "end");
+            const clips = isDna ? dnaClips : allClips;
 
-            if (clips.length === 0) {
+            if (allClips.length === 0) {
               await sendText(chatId, `❌ No video clips found in <b>${esc(projectName)}</b>. Upload clips in the app first.`);
+              return Response.json({ ok: true });
+            }
+            if (isDna && (dnaClips.length < 2 || !dnaClips.some((c) => c.dna_role === "start"))) {
+              await sendText(
+                chatId,
+                `❌ <b>${esc(projectName)}</b> needs at least 2 DNA-tagged clips (one tagged <b>Start</b>) for Clip DNA.\n\nOpen Media Library in the app and set each clip's DNA Role.`,
+              );
               return Response.json({ ok: true });
             }
 
             const primaryHook = hooks[0] || { id: null, text: "Wait for the end..." };
-            const primaryClip = clips[0];
+            const primaryClip = clips.find((c) => c.dna_role === "start") || clips[0]!;
 
             let withAudio = false;
             let soundtrackUrl: string | null = null;
@@ -388,35 +399,31 @@ export const Route = createFileRoute("/api/public/telegram/webhook")({
             if (audioKey === "orig") {
               withAudio = true;
               audioLabel = "Original clip audio";
-            } else if (audioKey === "va") {
+            } else if (audioKey === "va" || audioKey.startsWith("lib_")) {
               withAudio = false;
-              const { data: trending } = await db()
-                .from("soundtrack_tracks")
-                .select("storage_path, name")
-                .eq("is_curated", true)
-                .limit(1)
-                .maybeSingle();
-
-              if (trending) {
-                const { data: pub } = db().storage.from("soundtracks").getPublicUrl(trending.storage_path);
-                soundtrackUrl = pub.publicUrl;
-                audioLabel = `VA: ${trending.name}`;
+              let q = db()
+                .from("trending_audios")
+                .select("id, title, storage_path")
+                .not("storage_path", "is", null);
+              if (audioKey === "va") {
+                q = q.or(`user_id.eq.${link.user_id},user_id.is.null`).order("virality_score", { ascending: false });
               } else {
-                audioLabel = "VA Auto (Curated)";
+                q = q.eq("user_id", link.user_id).order("created_at", { ascending: false });
               }
-            } else if (audioKey.startsWith("lib_")) {
-              withAudio = false;
-              const trackPrefix = audioKey.replace("lib_", "");
-              const { data: track } = await db()
-                .from("soundtrack_tracks")
-                .select("storage_path, name")
-                .ilike("id", `${trackPrefix}%`)
-                .maybeSingle();
-
-              if (track) {
-                const { data: pub } = db().storage.from("soundtracks").getPublicUrl(track.storage_path);
-                soundtrackUrl = pub.publicUrl;
-                audioLabel = track.name;
+              const { data: tracks } = await q.limit(20);
+              const prefix = audioKey.replace("lib_", "");
+              const pool = tracks || [];
+              const track =
+                audioKey === "va"
+                  ? pool[Math.floor(Math.random() * Math.min(5, pool.length))]
+                  : pool.find((t) => t.id.startsWith(prefix));
+              if (track?.storage_path) {
+                // Private bucket: the browser worker signs this path at render time.
+                soundtrackUrl = `media:${track.storage_path}`;
+                audioLabel = audioKey === "va" ? `VA: ${track.title}` : track.title;
+              } else {
+                withAudio = true;
+                audioLabel = "Original clip audio (no saved sound found)";
               }
             } else if (audioKey === "none") {
               withAudio = false;

@@ -95,7 +95,15 @@ export function RenderWorker() {
           .maybeSingle();
 
         const withAudio = hint?.with_audio ?? true;
-        const soundtrackUrl = hint?.soundtrack_url ?? undefined;
+        let soundtrackUrl = hint?.soundtrack_url ?? undefined;
+        if (soundtrackUrl?.startsWith("media:")) {
+          const { data: s } = await supabase.storage
+            .from("media")
+            .createSignedUrl(soundtrackUrl.slice("media:".length), 60 * 60);
+          soundtrackUrl = s?.signedUrl ?? undefined;
+        }
+        const batchMatch = hint?.style?.match(/batch=(\d+)/);
+        const batchTotal = batchMatch ? Math.max(1, parseInt(batchMatch[1]!, 10)) : 1;
 
         // Notify Telegram that rendering has actively started
         sendTelegramNotificationFn({
@@ -310,9 +318,9 @@ export function RenderWorker() {
               data: {
                 signedUrl: signed.signedUrl,
                 storagePath: outPath,
-                caption: `🎬 <b>Clip DNA Preview (9:16)</b>\n\n• <b>Hook:</b> "${recipe.overlay_text}"\n• <b>Duration:</b> ${targetDuration}s\n\nApprove below to save to your project library:`,
-                projectId: job.project_id,
+                caption: `🎬 <b>Clip DNA Preview (9:16)</b>\n\n• <b>Hook:</b> "${recipe.overlay_text}"\n• <b>Duration:</b> ${targetDuration}s\n• <b>Batch:</b> ${batchTotal}x\n\n${batchTotal > 1 ? `Approve to save this and render ${batchTotal - 1} more:` : "Approve below to save to your project library:"}`,
                 jobId: job.id,
+                batchTotal,
               },
             });
             toast.success("Preview delivered to Telegram!", { id: toastId });
