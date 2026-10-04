@@ -1,7 +1,7 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { createClient } from "@supabase/supabase-js";
-import { createHash, timingSafeEqual } from "crypto";
-import { tg, sendText, answerCallback } from "@/lib/telegram/bot.server";
+import { timingSafeEqual } from "crypto";
+import { tg, sendText, answerCallback, botToken, botKey, webhookSecret } from "@/lib/telegram/bot.server";
 
 function esc(str: string | null | undefined): string {
   if (!str) return "";
@@ -78,11 +78,6 @@ function buildBatchSelectKeyboard(projectId: string, style: string, duration: nu
   };
 }
 
-function deriveTelegramWebhookSecret(telegramApiKey: string): string {
-  return createHash("sha256")
-    .update(`telegram-webhook:${telegramApiKey}`)
-    .digest("base64url");
-}
 
 function safeEqual(a: string, b: string): boolean {
   const left = Buffer.from(a);
@@ -94,28 +89,49 @@ function safeEqual(a: string, b: string): boolean {
 let _supabase: any = null;
 function db() {
   if (!_supabase) {
-    _supabase = createClient(
-      process.env['SUPABASE_URL']!,
-      process.env['SUPABASE_SERVICE_ROLE_KEY']!
-    );
+    const key = process.env['SUPABASE_SERVICE_ROLE_KEY'] || process.env['SUPABASE_PUBLISHABLE_KEY']!;
+    _supabase = createClient(process.env['SUPABASE_URL']!, key, {
+      auth: { persistSession: false, autoRefreshToken: false },
+    });
   }
   return _supabase;
+}
+
+function formatCmd(cmd: string, data: any): string {
+  if (cmd === "status") {
+    return [
+      "<b>📊 Status</b>",
+      `Projects: ${data?.projects ?? 0}`,
+      `Clips: ${data?.clips ?? 0}`,
+      `Videos made: ${data?.videos ?? 0}`,
+      `Posts scheduled: ${data?.scheduled ?? 0}`,
+      `Published: ${data?.published ?? 0}`,
+      `Failed posts: ${data?.failed ?? 0}`,
+    ].join("\n");
+  }
+  const rows = (data ?? []) as any[];
+  if (!rows.length) return "Nothing here yet.";
+  if (cmd === "clips")
+    return "<b>🎬 Latest clips</b>\n" + rows.map((r) =>
+      `• ${esc(r.filename)} — ${Number(r.duration ?? 0).toFixed(1)}s · ${esc(r.dna_role ?? "no role")}`).join("\n");
+  if (cmd === "trends")
+    return "<b>🔥 Trending sounds</b>\n" + rows.map((r, i) =>
+      `${i + 1}. ${esc(r.title)}${r.author ? ` — ${esc(r.author)}` : ""}`).join("\n");
+  return "<b>🗓 Upcoming posts</b>\n" + rows.map((r) =>
+    `• ${new Date(r.scheduled_for).toUTCString().slice(0, 22)} UTC — ${esc(r.status)}`).join("\n");
 }
 
 export const Route = createFileRoute("/api/public/telegram/webhook")({
   server: {
     handlers: {
       POST: async ({ request }) => {
-        const TELEGRAM_API_KEY = process.env['TELEGRAM_API_KEY'];
-        if (!TELEGRAM_API_KEY) {
-          return new Response("TELEGRAM_API_KEY is not configured", { status: 500 });
-        }
-
-        const expectedSecret = deriveTelegramWebhookSecret(TELEGRAM_API_KEY);
+        const token = botToken();
+        const expectedSecret = webhookSecret(token);
         const actualSecret = request.headers.get("X-Telegram-Bot-Api-Secret-Token") ?? "";
         if (!safeEqual(actualSecret, expectedSecret)) {
           return new Response("Unauthorized", { status: 401 });
         }
+        const key = botKey(token);
 
         const update = await request.json();
 
@@ -128,49 +144,34 @@ export const Route = createFileRoute("/api/public/telegram/webhook")({
           if (!chatId) return Response.json({ ok: true });
 
           if (text.startsWith("/start")) {
-            const parts = text.split(" ");
-            const token = parts[1]?.trim();
+            const code = (text.split(" ")[1] || "").replace(/[^A-Za-z0-9]/g, "").slice(0, 32);
 
-            if (!token) {
+            if (!code) {
               await sendText(
                 chatId,
-                `👋 <b>Welcome to Creative Factory Bot!</b>\n\nTo link your account, open Settings → Integrations in the web app and click Connect Telegram.`
+                `👋 <b>Welcome to Creative Factory Bot!</b>\n\nTo link your account, open Settings in the web app and click Connect Telegram.`
               );
               return Response.json({ ok: true });
             }
 
-            // Verify connection token
-            const { data: linkCode } = await db()
-              .from("telegram_link_codes")
-              .select("user_id, expires_at")
-              .eq("code", token)
-              .maybeSingle();
-
-            if (!linkCode || new Date(linkCode.expires_at) < new Date()) {
-              await sendText(
-                chatId,
-                `❌ This link code has expired or is invalid. Please generate a new code in the web app.`
-              );
-              return Response.json({ ok: true });
-            }
-
-            await db().from("telegram_links").upsert(
-              {
-                user_id: linkCode.user_id,
-                chat_id: chatId,
-                username: msg.from?.username ?? null,
-                first_name: msg.from?.first_name ?? null,
-                linked_at: new Date().toISOString(),
-              },
-              { onConflict: "chat_id" }
-            );
-
+            const { data: ok, error } = await db().rpc("telegram_link", { _code: code, _chat_id: chatId, _key: key });
             await sendText(
               chatId,
-              `✅ <b>Account linked successfully!</b>\n\n` +
-              `You can now control rendering, approve Clip DNA variations, and receive 9:16 video deliveries right here.\n\n` +
-              `Type /render to start creating videos.`
+              !error && ok
+                ? `✅ <b>Connected! I'm your Creative Factory VA.</b>\n\nType /render to start creating videos, or /help for all commands.`
+                : `❌ That link expired. Open Settings in the app and tap Connect Telegram again.`
             );
+            return Response.json({ ok: true });
+          }
+
+          const simple = text.toLowerCase().replace(/^\//, "").replace(/@.*$/, "");
+          if (["status", "clips", "trends", "schedule"].includes(simple)) {
+            const { data: res, error } = await db().rpc("telegram_command", { _chat_id: chatId, _key: key, _cmd: simple });
+            if (error || !res?.linked) {
+              await sendText(chatId, `⚠️ Please connect your account first from Settings in the app.`);
+            } else {
+              await sendText(chatId, formatCmd(simple, res.data));
+            }
             return Response.json({ ok: true });
           }
 
@@ -214,6 +215,7 @@ export const Route = createFileRoute("/api/public/telegram/webhook")({
               `🤖 <b>Creative Factory Bot Commands:</b>\n\n` +
               `• /render - Start the 4-step Render Wizard\n` +
               `• /projects - List your active projects\n` +
+              `• /status, /clips, /trends, /schedule\n` +
               `• /help - Show available commands`
             );
             return Response.json({ ok: true });
