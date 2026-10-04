@@ -95,7 +95,15 @@ export function RenderWorker() {
           .maybeSingle();
 
         const withAudio = hint?.with_audio ?? true;
-        const soundtrackUrl = hint?.soundtrack_url ?? undefined;
+        let soundtrackUrl = hint?.soundtrack_url ?? undefined;
+        if (soundtrackUrl?.startsWith("media:")) {
+          const { data: s } = await supabase.storage
+            .from("media")
+            .createSignedUrl(soundtrackUrl.slice("media:".length), 60 * 60);
+          soundtrackUrl = s?.signedUrl ?? undefined;
+        }
+        const batchMatch = hint?.style?.match(/batch=(\d+)/);
+        const batchTotal = batchMatch ? Math.max(1, parseInt(batchMatch[1]!, 10)) : 1;
 
         // Notify Telegram that rendering has actively started
         sendTelegramNotificationFn({
@@ -112,7 +120,7 @@ export function RenderWorker() {
           placement = "bottom";
         }
 
-        let renderResult: { blob: Blob; extension: string; mimeType: string; thumbnail?: Blob | null };
+        let renderResult: { blob: Blob; extension: string; mimeType: string; thumbnail?: Blob | null | undefined };
 
         if (isDna) {
           // --- CLIP DNA MULTI-CLIP RENDERING (app-identical solver) ---
@@ -185,6 +193,7 @@ export function RenderWorker() {
           });
 
           const segments: SequenceSegment[] = planned.plan.segments.map((s) => ({
+            clipId: s.media_asset_id,
             url: planned.plan.clipById[s.media_asset_id]!.url,
             sourceIn: s.source_in,
             sourceOut: s.source_out,
@@ -194,6 +203,7 @@ export function RenderWorker() {
 
           renderResult = await renderSequence({
             segments,
+            durationSeconds: planned.plan.finalDuration,
             width: OUT_W,
             height: OUT_H,
             text: recipe.overlay_text || "",
@@ -240,7 +250,7 @@ export function RenderWorker() {
             placement,
             fontSize: recipe.font_size || 48,
             withAudio,
-            soundtrackUrl,
+            soundtrackUrl: soundtrackUrl ?? null,
             onProgress: (pct) => {
               const p = Math.max(5, Math.min(85, Math.round(pct * 0.85)));
               supabase.from("render_jobs").update({ progress: p }).eq("id", job.id).then(() => {});
@@ -276,8 +286,8 @@ export function RenderWorker() {
           if (thumbErr) thumbPath = null;
         }
 
-        // 5. Save & Approval Handling:
-        if (isDna) {
+        // 5. Save & Approval Handling (approved-batch variants auto-save):
+        if (isDna && !hint?.style?.includes("auto")) {
           // --- DNA Render: Keep as preview for Telegram approval ---
           // NOT saved to generated_videos yet. Mark the job 'awaiting_approval'
           // so it doesn't look finished, and don't flip status to 'completed'.
@@ -310,9 +320,9 @@ export function RenderWorker() {
               data: {
                 signedUrl: signed.signedUrl,
                 storagePath: outPath,
-                caption: `🎬 <b>Clip DNA Preview (9:16)</b>\n\n• <b>Hook:</b> "${recipe.overlay_text}"\n• <b>Duration:</b> ${targetDuration}s\n\nApprove below to save to your project library:`,
-                projectId: job.project_id,
+                caption: `🎬 <b>Clip DNA Preview (9:16)</b>\n\n• <b>Hook:</b> "${recipe.overlay_text}"\n• <b>Duration:</b> ${targetDuration}s\n• <b>Batch:</b> ${batchTotal}x\n\n${batchTotal > 1 ? `Approve to save this and render ${batchTotal - 1} more:` : "Approve below to save to your project library:"}`,
                 jobId: job.id,
+                batchTotal,
               },
             });
             toast.success("Preview delivered to Telegram!", { id: toastId });
