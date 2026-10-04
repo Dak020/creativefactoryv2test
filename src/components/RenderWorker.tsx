@@ -284,8 +284,8 @@ export function RenderWorker() {
           if (thumbErr) thumbPath = null;
         }
 
-        // 5. Save & Approval Handling:
-        if (isDna) {
+        // 5. Save & Approval Handling (approved-batch variants auto-save):
+        if (isDna && !hint?.style?.includes("auto")) {
           // --- DNA Render: Keep as preview for Telegram approval ---
           // NOT saved to generated_videos yet. Mark the job 'awaiting_approval'
           // so it doesn't look finished, and don't flip status to 'completed'.

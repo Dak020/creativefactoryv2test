@@ -664,7 +664,7 @@ export const Route = createFileRoute("/api/public/telegram/webhook")({
                   soundtrack_url: hint?.soundtrack_url ?? null,
                   audio_label: hint?.audio_label ?? "Same audio",
                   clip_ids: clips.map((c) => c.id),
-                  style: "dna",
+                  style: "dna:auto",
                 });
 
                 await db().from("render_jobs").insert({
