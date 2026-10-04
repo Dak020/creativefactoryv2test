@@ -10,37 +10,37 @@ export type { HookPlacement, SeekOptions };
 export { planStartOffsets };
 
 export interface SequenceSegment {
-  clipId?: string | undefined;
+  clipId?: string | undefined | undefined;
   url: string;
   sourceIn: number;
   sourceOut: number;
   speed: number;
-  role?: "start" | "middle" | "end" | string;
-  zoom?: number;
+  role?: "start" | "middle" | "end" | string | undefined;
+  zoom?: number | undefined;
 }
 
 export interface SequenceRenderOptions {
   segments: SequenceSegment[];
-  durationSeconds?: number | undefined;
+  durationSeconds?: number | undefined | undefined;
   width: number;
   height: number;
   text: string;
-  placement?: HookPlacement;
-  fontSize?: number;
-  textColor?: string;
-  backgroundColor?: string;
-  withAudio?: boolean;
-  soundtrackUrl?: string | null | undefined;
-  soundtrackVolume?: number;
-  onProgress?: (percent: number) => void;
-  signal?: AbortSignal;
+  placement?: HookPlacement | undefined;
+  fontSize?: number | undefined;
+  textColor?: string | undefined;
+  backgroundColor?: string | undefined;
+  withAudio?: boolean | undefined;
+  soundtrackUrl?: string | null | undefined | undefined;
+  soundtrackVolume?: number | undefined;
+  onProgress?: (percent: number) => void | undefined;
+  signal?: AbortSignal | undefined;
 }
 
 export interface SequenceRenderResult {
   blob: Blob;
   extension: string;
   mimeType: string;
-  thumbnail?: Blob | undefined;
+  thumbnail?: Blob | undefined | undefined;
   actualDuration: number;
 }
 

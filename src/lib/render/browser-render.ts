@@ -5,15 +5,15 @@ export interface BrowserRenderOptions {
   width: number;
   height: number;
   text: string;
-  placement?: HookPlacement;
-  fontSize?: number;
-  textColor?: string;
-  backgroundColor?: string;
-  withAudio?: boolean;
-  soundtrackUrl?: string | null | undefined;
-  soundtrackVolume?: number;
-  onProgress?: (percent: number) => void;
-  signal?: AbortSignal;
+  placement?: HookPlacement | undefined;
+  fontSize?: number | undefined;
+  textColor?: string | undefined;
+  backgroundColor?: string | undefined;
+  withAudio?: boolean | undefined;
+  soundtrackUrl?: string | null | undefined | undefined;
+  soundtrackVolume?: number | undefined;
+  onProgress?: (percent: number) => void | undefined;
+  signal?: AbortSignal | undefined;
 }
 
 export type HookPlacement = "top" | "middle" | "bottom";
@@ -22,7 +22,7 @@ export interface BrowserRenderResult {
   blob: Blob;
   extension: string;
   mimeType: string;
-  thumbnail?: Blob | undefined;
+  thumbnail?: Blob | undefined | undefined;
 }
 
 export class RenderCancelledError extends Error {
@@ -33,11 +33,11 @@ export class RenderCancelledError extends Error {
 }
 
 export interface SeekOptions {
-  seekMode?: "start" | "uniform" | "random" | "smart";
-  totalDuration?: number;
-  stepSeconds?: number;
-  mode?: "random" | "beginning" | "manual";
-  manualSeconds?: number;
+  seekMode?: "start" | "uniform" | "random" | "smart" | undefined;
+  totalDuration?: number | undefined;
+  stepSeconds?: number | undefined;
+  mode?: "random" | "beginning" | "manual" | undefined;
+  manualSeconds?: number | undefined;
 }
 
 export function planStartOffsets(
