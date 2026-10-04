@@ -10,7 +10,7 @@ export type { HookPlacement, SeekOptions };
 export { planStartOffsets };
 
 export interface SequenceSegment {
-  clipId?: string | undefined | undefined;
+  clipId?: string | undefined;
   url: string;
   sourceIn: number;
   sourceOut: number;
@@ -21,7 +21,7 @@ export interface SequenceSegment {
 
 export interface SequenceRenderOptions {
   segments: SequenceSegment[];
-  durationSeconds?: number | undefined | undefined;
+  durationSeconds?: number | undefined;
   width: number;
   height: number;
   text: string;
@@ -30,9 +30,9 @@ export interface SequenceRenderOptions {
   textColor?: string | undefined;
   backgroundColor?: string | undefined;
   withAudio?: boolean | undefined;
-  soundtrackUrl?: string | null | undefined | undefined;
+  soundtrackUrl?: string | null | undefined;
   soundtrackVolume?: number | undefined;
-  onProgress?: (percent: number) => void | undefined;
+  onProgress?: (percent: number) => void;
   signal?: AbortSignal | undefined;
 }
 
@@ -40,7 +40,7 @@ export interface SequenceRenderResult {
   blob: Blob;
   extension: string;
   mimeType: string;
-  thumbnail?: Blob | undefined | undefined;
+  thumbnail?: Blob | undefined;
   actualDuration: number;
 }
 

@@ -10,9 +10,9 @@ export interface BrowserRenderOptions {
   textColor?: string | undefined;
   backgroundColor?: string | undefined;
   withAudio?: boolean | undefined;
-  soundtrackUrl?: string | null | undefined | undefined;
+  soundtrackUrl?: string | null | undefined;
   soundtrackVolume?: number | undefined;
-  onProgress?: (percent: number) => void | undefined;
+  onProgress?: (percent: number) => void;
   signal?: AbortSignal | undefined;
 }
 
@@ -22,7 +22,7 @@ export interface BrowserRenderResult {
   blob: Blob;
   extension: string;
   mimeType: string;
-  thumbnail?: Blob | undefined | undefined;
+  thumbnail?: Blob | undefined;
 }
 
 export class RenderCancelledError extends Error {
