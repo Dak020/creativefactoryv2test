@@ -193,6 +193,7 @@ export function RenderWorker() {
           });
 
           const segments: SequenceSegment[] = planned.plan.segments.map((s) => ({
+            clipId: s.media_asset_id,
             url: planned.plan.clipById[s.media_asset_id]!.url,
             sourceIn: s.source_in,
             sourceOut: s.source_out,
@@ -202,6 +203,7 @@ export function RenderWorker() {
 
           renderResult = await renderSequence({
             segments,
+            durationSeconds: planned.plan.finalDuration,
             width: OUT_W,
             height: OUT_H,
             text: recipe.overlay_text || "",
@@ -248,7 +250,7 @@ export function RenderWorker() {
             placement,
             fontSize: recipe.font_size || 48,
             withAudio,
-            soundtrackUrl,
+            soundtrackUrl: soundtrackUrl ?? null,
             onProgress: (pct) => {
               const p = Math.max(5, Math.min(85, Math.round(pct * 0.85)));
               supabase.from("render_jobs").update({ progress: p }).eq("id", job.id).then(() => {});

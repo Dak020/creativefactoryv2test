@@ -22,7 +22,7 @@ export interface BrowserRenderResult {
   blob: Blob;
   extension: string;
   mimeType: string;
-  thumbnail?: Blob;
+  thumbnail?: Blob | undefined;
 }
 
 export class RenderCancelledError extends Error {
@@ -36,6 +36,8 @@ export interface SeekOptions {
   seekMode?: "start" | "uniform" | "random" | "smart";
   totalDuration?: number;
   stepSeconds?: number;
+  mode?: "random" | "beginning" | "manual";
+  manualSeconds?: number;
 }
 
 export function planStartOffsets(
