@@ -199,7 +199,7 @@ export const Route = createFileRoute("/api/public/telegram/webhook")({
             }
 
             const keyboard = {
-              inline_keyboard: projects.map((p) => [
+              inline_keyboard: projects.map((p: any) => [
                 { text: `📁 ${p.name}`, callback_data: `step_style:${p.id}` },
               ]),
             };
@@ -319,7 +319,7 @@ export const Route = createFileRoute("/api/public/telegram/webhook")({
                 .not("storage_path", "is", null)
                 .order("created_at", { ascending: false })
                 .limit(3);
-              libraryTracks = (tracks || []).map((t) => ({ id: t.id, name: t.title }));
+              libraryTracks = (tracks || []).map((t: any) => ({ id: t.id, name: t.title }));
             }
 
             const prefix = `do_rend:${parts[1]}:${duration}:${batch}:${projectId}`;
@@ -327,7 +327,7 @@ export const Route = createFileRoute("/api/public/telegram/webhook")({
               inline_keyboard: [
                 [{ text: "🔥 VA Trending Sound (Auto-Pick)", callback_data: `${prefix}:va` }],
                 [{ text: "📹 Original Clip Audio (Keep Voice)", callback_data: `${prefix}:orig` }],
-                ...libraryTracks.map((t) => [
+                ...libraryTracks.map((t: any) => [
                   { text: `🎵 ${t.name.slice(0, 26)}`, callback_data: `${prefix}:lib_${t.id.slice(0, 8)}` },
                 ]),
                 [{ text: "🔇 Silent (No Audio)", callback_data: `${prefix}:none` }],
@@ -375,14 +375,14 @@ export const Route = createFileRoute("/api/public/telegram/webhook")({
             const projectName = projRes.data?.name || "Project";
             const hooks = hooksRes.data || [];
             const allClips = clipsRes.data || [];
-            const dnaClips = allClips.filter((c) => c.dna_role === "start" || c.dna_role === "middle" || c.dna_role === "end");
+            const dnaClips = allClips.filter((c: any) => c.dna_role === "start" || c.dna_role === "middle" || c.dna_role === "end");
             const clips = isDna ? dnaClips : allClips;
 
             if (allClips.length === 0) {
               await sendText(chatId, `❌ No video clips found in <b>${esc(projectName)}</b>. Upload clips in the app first.`);
               return Response.json({ ok: true });
             }
-            if (isDna && (dnaClips.length < 2 || !dnaClips.some((c) => c.dna_role === "start"))) {
+            if (isDna && (dnaClips.length < 2 || !dnaClips.some((c: any) => c.dna_role === "start"))) {
               await sendText(
                 chatId,
                 `❌ <b>${esc(projectName)}</b> needs at least 2 DNA-tagged clips (one tagged <b>Start</b>) for Clip DNA.\n\nOpen Media Library in the app and set each clip's DNA Role.`,
@@ -391,7 +391,7 @@ export const Route = createFileRoute("/api/public/telegram/webhook")({
             }
 
             const primaryHook = hooks[0] || { id: null, text: "Wait for the end..." };
-            const primaryClip = clips.find((c) => c.dna_role === "start") || clips[0]!;
+            const primaryClip = clips.find((c: any) => c.dna_role === "start") || clips[0]!;
 
             let withAudio = false;
             let soundtrackUrl: string | null = null;
@@ -417,7 +417,7 @@ export const Route = createFileRoute("/api/public/telegram/webhook")({
               const track =
                 audioKey === "va"
                   ? pool[Math.floor(Math.random() * Math.min(5, pool.length))]
-                  : pool.find((t) => t.id.startsWith(prefix));
+                  : pool.find((t: any) => t.id.startsWith(prefix));
               if (track?.storage_path) {
                 // Private bucket: the browser worker signs this path at render time.
                 soundtrackUrl = `media:${track.storage_path}`;
@@ -465,7 +465,7 @@ export const Route = createFileRoute("/api/public/telegram/webhook")({
               with_audio: withAudio,
               soundtrack_url: soundtrackUrl,
               audio_label: audioLabel,
-              clip_ids: clips.map((c) => c.id),
+              clip_ids: clips.map((c: any) => c.id),
               style: styleValue,
             });
             if (hintErr) {
@@ -636,7 +636,7 @@ export const Route = createFileRoute("/api/public/telegram/webhook")({
 
             for (let i = 0; i < remaining; i++) {
               const hook = hooks[(i + 1) % hooks.length] || hooks[0] || { id: null, text: recipe?.overlay_text ?? "" };
-              const openerClip = clips.find((c) => c.dna_role === "start") || clips[0] || { id: recipe?.media_asset_id };
+              const openerClip = clips.find((c: any) => c.dna_role === "start") || clips[0] || { id: recipe?.media_asset_id };
 
               const { data: newRecipe } = await db()
                 .from("video_recipes")
@@ -664,7 +664,7 @@ export const Route = createFileRoute("/api/public/telegram/webhook")({
                   with_audio: hint?.with_audio ?? false,
                   soundtrack_url: hint?.soundtrack_url ?? null,
                   audio_label: hint?.audio_label ?? "Same audio",
-                  clip_ids: clips.map((c) => c.id),
+                  clip_ids: clips.map((c: any) => c.id),
                   style: "dna:auto",
                 });
 
