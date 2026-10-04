@@ -39,45 +39,44 @@ function buildStyleSelectKeyboard(projectId: string) {
   return {
     inline_keyboard: [
       [
-        { text: "Single Clip Cut", callback_data: `st_s:${projectId}` },
-        { text: "Clip DNA (Multi-Cut)", callback_data: `st_d:${projectId}` },
+        { text: "⚡ Single Clip Cut", callback_data: `st:s:${projectId}` },
+        { text: "🧬 Clip DNA (Multi-Cut)", callback_data: `st:d:${projectId}` },
       ],
-      [{ text: "Cancel", callback_data: "cancel_wizard" }],
+      [{ text: "❌ Cancel", callback_data: "cancel_wizard" }],
     ],
   };
 }
 
-function buildDurationKeyboard(projectId: string, style: string) {
-  const prefix = style === "dna" ? "dur_d" : "dur_s";
+function buildDurationKeyboard(projectId: string, style: "s" | "d") {
   return {
     inline_keyboard: [
       [
-        { text: "6s", callback_data: `${prefix}:6:${projectId}` },
-        { text: "8s (Default)", callback_data: `${prefix}:8:${projectId}` },
+        { text: "6s", callback_data: `dur:${style}:6:${projectId}` },
+        { text: "8s (Default)", callback_data: `dur:${style}:8:${projectId}` },
       ],
       [
-        { text: "10s", callback_data: `${prefix}:10:${projectId}` },
-        { text: "15s", callback_data: `${prefix}:15:${projectId}` },
+        { text: "10s", callback_data: `dur:${style}:10:${projectId}` },
+        { text: "15s", callback_data: `dur:${style}:15:${projectId}` },
       ],
-      [{ text: "Cancel", callback_data: "cancel_wizard" }],
+      [{ text: "« Back to Style", callback_data: `step_proj:${projectId}` }],
+      [{ text: "❌ Cancel", callback_data: "cancel_wizard" }],
     ],
   };
 }
 
-function buildBatchSelectKeyboard(projectId: string, style: string, duration: number) {
-  const prefix = style === "dna" ? "bch_d" : "bch_s";
+function buildBatchSelectKeyboard(projectId: string, style: "s" | "d", duration: number) {
   return {
     inline_keyboard: [
       [
-        { text: "1x Single", callback_data: `${prefix}:1:${duration}:${projectId}` },
-        { text: "3x Variants", callback_data: `${prefix}:3:${duration}:${projectId}` },
-        { text: "5x Variants", callback_data: `${prefix}:5:${duration}:${projectId}` },
+        { text: "1x Single", callback_data: `bat:${style}:${duration}:1:${projectId}` },
+        { text: "3x Variants", callback_data: `bat:${style}:${duration}:3:${projectId}` },
+        { text: "5x Variants", callback_data: `bat:${style}:${duration}:5:${projectId}` },
       ],
-      [{ text: "Cancel", callback_data: "cancel_wizard" }],
+      [{ text: "« Back to Duration", callback_data: `st:${style}:${projectId}` }],
+      [{ text: "❌ Cancel", callback_data: "cancel_wizard" }],
     ],
   };
 }
-
 
 function safeEqual(a: string, b: string): boolean {
   const left = Buffer.from(a);
@@ -97,6 +96,7 @@ function db() {
   return _supabase;
 }
 
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
 function formatCmd(cmd: string, data: any): string {
   if (cmd === "status") {
     return [
@@ -109,6 +109,7 @@ function formatCmd(cmd: string, data: any): string {
       `Failed posts: ${data?.failed ?? 0}`,
     ].join("\n");
   }
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const rows = (data ?? []) as any[];
   if (!rows.length) return "Nothing here yet.";
   if (cmd === "clips")
@@ -200,8 +201,9 @@ export const Route = createFileRoute("/api/public/telegram/webhook")({
             }
 
             const keyboard = {
+              // eslint-disable-next-line @typescript-eslint/no-explicit-any
               inline_keyboard: projects.map((p: any) => [
-                { text: `📁 ${p.name}`, callback_data: `step_style:${p.id}` },
+                { text: `📁 ${p.name}`, callback_data: `step_proj:${p.id}` },
               ]),
             };
 
@@ -237,8 +239,15 @@ export const Route = createFileRoute("/api/public/telegram/webhook")({
             return Response.json({ ok: true });
           }
 
-          // Step 1: Choose Style (Single vs. Clip DNA)
-          if (data.startsWith("step_style:")) {
+          // Cancel Wizard
+          if (data === "cancel_wizard") {
+            await answerCallback(callbackId, "Cancelled");
+            await editMessageText(chatId, messageId, `❌ <i>Render wizard cancelled. Type /render to start again.</i>`);
+            return Response.json({ ok: true });
+          }
+
+          // Step 1: Choose Style (Triggered by project selection or back button)
+          if (data.startsWith("step_proj:") || data.startsWith("step_style:")) {
             const projectId = data.split(":")[1];
             await answerCallback(callbackId);
 
@@ -262,10 +271,10 @@ export const Route = createFileRoute("/api/public/telegram/webhook")({
             return Response.json({ ok: true });
           }
 
-          // Step 2: Choose Duration (6s, 8s default, 10s, 15s)
-          if (data.startsWith("step_dur:")) {
+          // Step 2: Choose Duration (Triggered by style selection: st:s:... or st:d:...)
+          if (data.startsWith("st:") || data.startsWith("step_dur:")) {
             const parts = data.split(":");
-            const style = parts[1] === "d" ? "dna" : "single";
+            const style = parts[1] === "d" ? "d" : "s";
             const projectId = parts[2];
             await answerCallback(callbackId);
 
@@ -274,16 +283,16 @@ export const Route = createFileRoute("/api/public/telegram/webhook")({
               chatId,
               messageId,
               `⏱️ <b>Step 2 of 4: Choose Target Duration</b>\n\n` +
-              `Select the target duration for this ${style === "dna" ? "Clip DNA sequence" : "single clip"}:`,
+              `Select the target duration for this ${style === "d" ? "Clip DNA sequence" : "single clip"}:`,
               keyboard
             );
             return Response.json({ ok: true });
           }
 
-          // Step 3: Choose Batch Quantity (1x, 3x, 5x)
-          if (data.startsWith("step_bat:")) {
+          // Step 3: Choose Batch Quantity (Triggered by duration selection: dur:s:8:... or dur:d:8:...)
+          if (data.startsWith("dur:") || data.startsWith("step_bat:")) {
             const parts = data.split(":");
-            const style = parts[1] === "d" ? "dna" : "single";
+            const style = parts[1] === "d" ? "d" : "s";
             const duration = parseInt(parts[2], 10) || 8;
             const projectId = parts[3];
             await answerCallback(callbackId);
@@ -295,7 +304,7 @@ export const Route = createFileRoute("/api/public/telegram/webhook")({
               `📦 <b>Step 3 of 4: Choose Batch Quantity</b>\n\n` +
               `• <b>1x Single</b>: Render 1 video\n` +
               `• <b>3x / 5x Variants</b>: Multiple cuts with randomized hooks & speed ramping\n\n` +
-              (style === "dna"
+              (style === "d"
                 ? `<i>Note: For DNA batches, a style preview is sent here first. Once you approve, the remaining batch renders automatically.</i>`
                 : `<i>Note: Single batches render all variants straight into your library.</i>`),
               keyboard
@@ -303,9 +312,10 @@ export const Route = createFileRoute("/api/public/telegram/webhook")({
             return Response.json({ ok: true });
           }
 
-          // Step 4: Choose Audio Soundtrack
-          if (data.startsWith("step_aud:")) {
+          // Step 4: Choose Audio Soundtrack (Triggered by batch selection: bat:s:8:3:... or bat:d:8:3:...)
+          if (data.startsWith("bat:") || data.startsWith("step_aud:")) {
             const parts = data.split(":");
+            const style = parts[1] === "d" ? "d" : "s";
             const duration = parseInt(parts[2], 10) || 8;
             const batch = parseInt(parts[3], 10) || 1;
             const projectId = parts[4];
@@ -321,19 +331,22 @@ export const Route = createFileRoute("/api/public/telegram/webhook")({
                 .not("storage_path", "is", null)
                 .order("created_at", { ascending: false })
                 .limit(3);
+              // eslint-disable-next-line @typescript-eslint/no-explicit-any
               libraryTracks = (tracks || []).map((t: any) => ({ id: t.id, name: t.title }));
             }
 
-            const prefix = `do_rend:${parts[1]}:${duration}:${batch}:${projectId}`;
+            // Compact prefix strictly <= 48 bytes to ensure button callbacks never exceed Telegram 64-byte limit
+            const prefix = `rnd:${style}:${duration}:${batch}:${projectId}`;
             const keyboard = {
               inline_keyboard: [
                 [{ text: "🔥 VA Trending Sound (Auto-Pick)", callback_data: `${prefix}:va` }],
                 [{ text: "📹 Original Clip Audio (Keep Voice)", callback_data: `${prefix}:orig` }],
+                // eslint-disable-next-line @typescript-eslint/no-explicit-any
                 ...libraryTracks.map((t: any) => [
-                  { text: `🎵 ${t.name.slice(0, 26)}`, callback_data: `${prefix}:lib_${t.id.slice(0, 8)}` },
+                  { text: `🎵 ${t.name.slice(0, 24)}`, callback_data: `${prefix}:lib_${t.id.slice(0, 6)}` },
                 ]),
                 [{ text: "🔇 Silent (No Audio)", callback_data: `${prefix}:none` }],
-                [{ text: "« Back to Batch", callback_data: `step_bat:${parts[1]}:${duration}:${projectId}` }],
+                [{ text: "« Back to Batch", callback_data: `dur:${style}:${duration}:${projectId}` }],
               ],
             };
 
@@ -350,8 +363,8 @@ export const Route = createFileRoute("/api/public/telegram/webhook")({
             return Response.json({ ok: true });
           }
 
-          // Step 5: Execute Render Queueing
-          if (data.startsWith("do_rend:")) {
+          // Step 5: Execute Render Queueing (Triggered by audio selection: rnd:... or do_rend:...)
+          if (data.startsWith("rnd:") || data.startsWith("do_rend:")) {
             const parts = data.split(":");
             const style = parts[1] === "d" ? "dna" : "single";
             const isDna = style === "dna";
@@ -377,6 +390,7 @@ export const Route = createFileRoute("/api/public/telegram/webhook")({
             const projectName = projRes.data?.name || "Project";
             const hooks = hooksRes.data || [];
             const allClips = clipsRes.data || [];
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
             const dnaClips = allClips.filter((c: any) => c.dna_role === "start" || c.dna_role === "middle" || c.dna_role === "end");
             const clips = isDna ? dnaClips : allClips;
 
@@ -384,6 +398,7 @@ export const Route = createFileRoute("/api/public/telegram/webhook")({
               await sendText(chatId, `❌ No video clips found in <b>${esc(projectName)}</b>. Upload clips in the app first.`);
               return Response.json({ ok: true });
             }
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
             if (isDna && (dnaClips.length < 2 || !dnaClips.some((c: any) => c.dna_role === "start"))) {
               await sendText(
                 chatId,
@@ -393,6 +408,7 @@ export const Route = createFileRoute("/api/public/telegram/webhook")({
             }
 
             const primaryHook = hooks[0] || { id: null, text: "Wait for the end..." };
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
             const primaryClip = clips.find((c: any) => c.dna_role === "start") || clips[0]!;
 
             let withAudio = false;
@@ -419,9 +435,9 @@ export const Route = createFileRoute("/api/public/telegram/webhook")({
               const track =
                 audioKey === "va"
                   ? pool[Math.floor(Math.random() * Math.min(5, pool.length))]
+                  // eslint-disable-next-line @typescript-eslint/no-explicit-any
                   : pool.find((t: any) => t.id.startsWith(prefix));
               if (track?.storage_path) {
-                // Private bucket: the browser worker signs this path at render time.
                 soundtrackUrl = `media:${track.storage_path}`;
                 audioLabel = audioKey === "va" ? `VA: ${track.title}` : track.title;
               } else {
@@ -459,7 +475,6 @@ export const Route = createFileRoute("/api/public/telegram/webhook")({
               return Response.json({ ok: true });
             }
 
-            // Encode batch count in style string without requiring a non-existent batch_total column
             const styleValue = isDna ? (batchTotal > 1 ? `dna:batch=${batchTotal}` : "dna") : "single";
             const { error: hintErr } = await db().from("render_job_hints").insert({
               recipe_id: recipe.id,
@@ -467,6 +482,7 @@ export const Route = createFileRoute("/api/public/telegram/webhook")({
               with_audio: withAudio,
               soundtrack_url: soundtrackUrl,
               audio_label: audioLabel,
+              // eslint-disable-next-line @typescript-eslint/no-explicit-any
               clip_ids: clips.map((c: any) => c.id),
               style: styleValue,
             });
@@ -638,6 +654,7 @@ export const Route = createFileRoute("/api/public/telegram/webhook")({
 
             for (let i = 0; i < remaining; i++) {
               const hook = hooks[(i + 1) % hooks.length] || hooks[0] || { id: null, text: recipe?.overlay_text ?? "" };
+              // eslint-disable-next-line @typescript-eslint/no-explicit-any
               const openerClip = clips.find((c: any) => c.dna_role === "start") || clips[0] || { id: recipe?.media_asset_id };
 
               const { data: newRecipe } = await db()
@@ -666,6 +683,7 @@ export const Route = createFileRoute("/api/public/telegram/webhook")({
                   with_audio: hint?.with_audio ?? false,
                   soundtrack_url: hint?.soundtrack_url ?? null,
                   audio_label: hint?.audio_label ?? "Same audio",
+                  // eslint-disable-next-line @typescript-eslint/no-explicit-any
                   clip_ids: clips.map((c: any) => c.id),
                   style: "dna:auto",
                 });
@@ -696,6 +714,8 @@ export const Route = createFileRoute("/api/public/telegram/webhook")({
             return Response.json({ ok: true });
           }
 
+          // Always answer any unhandled callback to release the button loading spinner
+          await answerCallback(callbackId);
           return Response.json({ ok: true });
         }
 
