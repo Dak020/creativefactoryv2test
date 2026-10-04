@@ -78,11 +78,6 @@ function buildBatchSelectKeyboard(projectId: string, style: string, duration: nu
   };
 }
 
-function deriveTelegramWebhookSecret(telegramApiKey: string): string {
-  return createHash("sha256")
-    .update(`telegram-webhook:${telegramApiKey}`)
-    .digest("base64url");
-}
 
 function safeEqual(a: string, b: string): boolean {
   const left = Buffer.from(a);
@@ -220,6 +215,7 @@ export const Route = createFileRoute("/api/public/telegram/webhook")({
               `🤖 <b>Creative Factory Bot Commands:</b>\n\n` +
               `• /render - Start the 4-step Render Wizard\n` +
               `• /projects - List your active projects\n` +
+              `• /status, /clips, /trends, /schedule\n` +
               `• /help - Show available commands`
             );
             return Response.json({ ok: true });
