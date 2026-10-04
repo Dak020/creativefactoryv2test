@@ -120,7 +120,7 @@ export function RenderWorker() {
           placement = "bottom";
         }
 
-        let renderResult: { blob: Blob; extension: string; mimeType: string; thumbnail?: Blob | null };
+        let renderResult: { blob: Blob; extension: string; mimeType: string; thumbnail?: Blob | null | undefined };
 
         if (isDna) {
           // --- CLIP DNA MULTI-CLIP RENDERING (app-identical solver) ---

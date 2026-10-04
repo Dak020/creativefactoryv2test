@@ -10,7 +10,7 @@ export interface BrowserRenderOptions {
   textColor?: string;
   backgroundColor?: string;
   withAudio?: boolean;
-  soundtrackUrl?: string | null;
+  soundtrackUrl?: string | null | undefined;
   soundtrackVolume?: number;
   onProgress?: (percent: number) => void;
   signal?: AbortSignal;
