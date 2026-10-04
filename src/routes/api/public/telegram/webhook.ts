@@ -90,12 +90,13 @@ function safeEqual(a: string, b: string): boolean {
   return left.length === right.length && timingSafeEqual(left, right);
 }
 
-let _supabase: ReturnType<typeof createClient> | null = null;
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+let _supabase: any = null;
 function db() {
   if (!_supabase) {
     _supabase = createClient(
-      process.env.SUPABASE_URL!,
-      process.env.SUPABASE_SERVICE_ROLE_KEY!
+      process.env['SUPABASE_URL']!,
+      process.env['SUPABASE_SERVICE_ROLE_KEY']!
     );
   }
   return _supabase;
@@ -105,7 +106,7 @@ export const Route = createFileRoute("/api/public/telegram/webhook")({
   server: {
     handlers: {
       POST: async ({ request }) => {
-        const TELEGRAM_API_KEY = process.env.TELEGRAM_API_KEY;
+        const TELEGRAM_API_KEY = process.env['TELEGRAM_API_KEY'];
         if (!TELEGRAM_API_KEY) {
           return new Response("TELEGRAM_API_KEY is not configured", { status: 500 });
         }

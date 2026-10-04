@@ -32,6 +32,7 @@ export class RenderCancelledError extends Error {
   }
 }
 
+export type SeekMode = "random" | "beginning" | "manual";
 export interface SeekOptions {
   seekMode?: "start" | "uniform" | "random" | "smart" | undefined;
   totalDuration?: number | undefined;
