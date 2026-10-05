@@ -705,6 +705,28 @@ export const Route = createFileRoute("/api/public/telegram/webhook")({
             return Response.json({ ok: true });
           }
 
+          // Re-roll: cancel this preview and render a fresh random combination of the same recipe
+          if (data.startsWith("reroll:")) {
+            const jobId = data.split(":")[1];
+            await answerCallback(callbackId, "Re-rolling a new combination...");
+            const { data: link } = await db().from("telegram_links").select("user_id").eq("chat_id", chatId).maybeSingle();
+            const { data: job } = await db().from("render_jobs").select("*").eq("id", jobId).maybeSingle();
+            if (!link?.user_id || !job || job.user_id !== link.user_id) {
+              await sendText(chatId, "Preview not found.");
+              return Response.json({ ok: true });
+            }
+            await db().from("render_jobs").update({ status: "cancelled" }).eq("id", job.id);
+            await db().from("render_jobs").insert({
+              user_id: link.user_id,
+              project_id: job.project_id,
+              recipe_id: job.recipe_id,
+              status: "queued",
+              progress: 0,
+            });
+            await sendText(chatId, "🔄 <b>Re-rolling!</b> A new cut is rendering — keep the app open. The new preview will arrive here.");
+            return Response.json({ ok: true });
+          }
+
           // Discard Preview
           if (data.startsWith("discard:")) {
             const jobId = data.split(":")[1];

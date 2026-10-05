@@ -188,9 +188,11 @@ export function solveDna(
       if (c.role !== "start" || clips.length === 1) {
         return { min: MIN_SEGMENT_SECONDS, max: capacity };
       }
-      // Opening segment: clamped to the hook window, but always feasible.
+      // Opening segment: clamped to the hook window (scaled to ~35% of short
+      // targets, capped at START_MAX_SECONDS), but always feasible.
+      const hookCap = Math.min(START_MAX_SECONDS, Math.max(START_MIN_SECONDS, target * 0.35));
       const min = Math.min(Math.max(MIN_SEGMENT_SECONDS, START_MIN_SECONDS), capacity);
-      const max = Math.max(min, Math.min(capacity, START_MAX_SECONDS));
+      const max = Math.max(min, Math.min(capacity, hookCap));
       return { min, max };
     });
     const split = randomSplit(target, bounds);
