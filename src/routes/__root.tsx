@@ -44,7 +44,7 @@ function ErrorComponent({ error, reset }: ErrorComponentProps) {
     if (/dynamically imported module|Importing a module script failed/i.test(String((error as Error)?.message ?? ""))) {
       if (!sessionStorage.getItem("cf-chunk-reload")) {
         sessionStorage.setItem("cf-chunk-reload", "1");
-        window.location.reload();
+        { const u = new URL(window.location.href); u.searchParams.set("_r", String(Date.now())); window.location.replace(u.toString()); }
         return;
       }
     }
@@ -133,7 +133,7 @@ function RootComponent() {
       if (sessionStorage.getItem(KEY)) return;
       sessionStorage.setItem(KEY, "1");
       e?.preventDefault();
-      window.location.reload();
+      { const u = new URL(window.location.href); u.searchParams.set("_r", String(Date.now())); window.location.replace(u.toString()); }
     };
     const onRejection = (e: PromiseRejectionEvent) => {
       const msg = String((e.reason as Error)?.message ?? e.reason ?? "");

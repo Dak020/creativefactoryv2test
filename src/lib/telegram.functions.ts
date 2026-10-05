@@ -119,6 +119,7 @@ export const sendTelegramPreviewFn = createServerFn({ method: "POST" })
           { text: approveText, callback_data: approveCallback },
           { text: "❌ Discard", callback_data: `discard:${jobId}` },
         ],
+        [{ text: "🔄 Re-roll Combination", callback_data: `reroll:${jobId}` }],
       ],
     };
 
