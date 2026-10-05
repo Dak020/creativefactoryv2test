@@ -621,19 +621,7 @@ export const Route = createFileRoute("/api/public/telegram/webhook")({
             }
 
             const { data: recipe } = await db().from("video_recipes").select("*").eq("id", job.recipe_id).maybeSingle();
-            await db().from("generated_videos").insert({
-              user_id: link.user_id,
-              project_id: job.project_id,
-              render_job_id: job.id,
-              recipe_id: recipe?.id ?? job.recipe_id,
-              hook_id: recipe?.hook_id ?? null,
-              media_asset_id: recipe?.media_asset_id ?? null,
-              hook_text: recipe?.overlay_text ?? "",
-              output_url: job.output_url,
-              thumbnail_url: `${link.user_id}/${job.id}.jpg`,
-              duration: recipe?.duration ?? 8,
-              status: "completed",
-            });
+            // Like the web app, the style preview is a test cut only — not saved to the library.
             await db().from("render_jobs").update({ status: "completed", completed_at: new Date().toISOString() }).eq("id", job.id);
 
             const { data: hint } = await db().from("render_job_hints").select("*").eq("recipe_id", job.recipe_id).maybeSingle();
