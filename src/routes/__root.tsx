@@ -41,7 +41,7 @@ function ErrorComponent({ error, reset }: ErrorComponentProps) {
   console.error(error);
   const router = useRouter();
   useEffect(() => {
-    if (/dynamically imported module|Importing a module script failed/i.test(String((error as Error)?.message ?? ""))) {
+    if (/dynamically imported module|Importing a module script failed|reading 'component'/i.test(String((error as Error)?.message ?? ""))) {
       if (!sessionStorage.getItem("cf-chunk-reload")) {
         sessionStorage.setItem("cf-chunk-reload", "1");
         { const u = new URL(window.location.href); u.searchParams.set("_r", String(Date.now())); window.location.replace(u.toString()); }
@@ -137,7 +137,7 @@ function RootComponent() {
     };
     const onRejection = (e: PromiseRejectionEvent) => {
       const msg = String((e.reason as Error)?.message ?? e.reason ?? "");
-      if (/dynamically imported module|Importing a module script failed/i.test(msg)) reloadOnce();
+      if (/dynamically imported module|Importing a module script failed|reading 'component'/i.test(msg)) reloadOnce();
     };
     window.addEventListener("vite:preloadError", reloadOnce);
     window.addEventListener("unhandledrejection", onRejection);
