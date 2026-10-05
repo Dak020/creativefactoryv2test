@@ -688,7 +688,7 @@ export const Route = createFileRoute("/api/public/telegram/webhook")({
 
             await sendText(
               chatId,
-              `🚀 <b>Style Approved!</b>\n\nPreview saved, and <b>${remaining} new DNA variants</b> are now rendering!`
+              `🚀 <b>Style Approved!</b>\n\nStyle locked in — <b>${remaining} new DNA variants</b> are now rendering!`
             );
             return Response.json({ ok: true });
           }
