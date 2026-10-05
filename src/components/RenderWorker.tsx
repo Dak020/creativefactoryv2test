@@ -320,7 +320,7 @@ export function RenderWorker() {
               data: {
                 signedUrl: signed.signedUrl,
                 storagePath: outPath,
-                caption: `🎬 <b>Clip DNA Preview (9:16)</b>\n\n• <b>Hook:</b> "${recipe.overlay_text}"\n• <b>Duration:</b> ${targetDuration}s\n• <b>Batch:</b> ${batchTotal}x\n\n${batchTotal > 1 ? `Approve to save this and render ${batchTotal - 1} more:` : "Approve below to save to your project library:"}`,
+                caption: `🎬 <b>Clip DNA Preview (9:16)</b>\n\n• <b>Hook:</b> "${recipe.overlay_text}"\n• <b>Duration:</b> ${targetDuration}s\n• <b>Batch:</b> ${batchTotal}x\n\n${batchTotal > 1 ? `Approve to save this and render ${batchTotal} variants:` : "Approve below to save to your project library:"}`,
                 jobId: job.id,
                 batchTotal,
               },

@@ -263,7 +263,7 @@ function waitFor(
         ? ` (media error code ${el.error.code}: ${el.error.message})`
         : ` (readyState: ${el.readyState}, networkState: ${el.networkState})`;
       reject(new Error(`Timed out waiting for the clip to ${event}${errDetail}. Verify the video codec is H.264 MP4.`));
-    }, opts?.timeoutMs ?? 45_000);
+    }, opts?.timeoutMs ?? (event === "loadedmetadata" ? 90_000 : 45_000));
 
     if (opts?.signal?.aborted) {
       onAbort();
@@ -284,10 +284,14 @@ function waitFor(
     el.addEventListener("error", fail, { once: true });
     opts?.signal?.addEventListener("abort", onAbort, { once: true });
 
-    try {
-      el.load();
-    } catch {
-      /* ignore */
+    // Only kick off loading if nothing has started yet — calling load() again
+    // resets the element and aborts in-progress downloads/seeks (Safari).
+    if (el.networkState === 0 /* NETWORK_EMPTY */) {
+      try {
+        el.load();
+      } catch {
+        /* ignore */
+      }
     }
   });
 }

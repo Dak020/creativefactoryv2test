@@ -110,7 +110,7 @@ export const sendTelegramPreviewFn = createServerFn({ method: "POST" })
     const batchTotal = data.batchTotal || 1;
 
     // Compact callback data kept strictly <= 44 bytes to respect Telegram limits
-    const approveText = batchTotal > 1 ? `👍 Approve & Make ${batchTotal - 1} More` : "👍 Approve & Save";
+    const approveText = batchTotal > 1 ? `👍 Approve & Make ${batchTotal}` : "👍 Approve & Save";
     const approveCallback = batchTotal > 1 ? `apprv_b:${jobId}` : `approve:${jobId}`;
 
     const replyMarkup = {

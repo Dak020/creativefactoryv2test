@@ -562,7 +562,7 @@ export const Route = createFileRoute("/api/public/telegram/webhook")({
               `• <b>Sound:</b> ${esc(audioLabel)}\n` +
               `• <b>Hook:</b> "${esc(primaryHook.text)}"\n\n` +
               (isDna
-                ? `A 9:16 preview will be sent here for your approval${batchTotal > 1 ? ` before generating the remaining ${batchTotal - 1} variants.` : "."}`
+                ? `A 9:16 preview will be sent here for your approval${batchTotal > 1 ? ` before generating ${batchTotal} variants.` : "."}`
                 : `Keep your Creative Factory browser tab open. The ${batchTotal > 1 ? `${batchTotal} videos` : "video"} will auto-save to your library once rendered.`)
             );
             return Response.json({ ok: true });
@@ -642,7 +642,7 @@ export const Route = createFileRoute("/api/public/telegram/webhook")({
               const match = hint.style.match(/batch=(\d+)/);
               if (match) batchTotal = parseInt(match[1], 10);
             }
-            const remaining = Math.max(1, batchTotal - 1);
+            const remaining = Math.max(1, batchTotal);
 
             const [hooksRes, clipsRes] = await Promise.all([
               db().from("hooks").select("id, text").eq("project_id", job.project_id).order("created_at", { ascending: false }),
@@ -700,7 +700,7 @@ export const Route = createFileRoute("/api/public/telegram/webhook")({
 
             await sendText(
               chatId,
-              `🚀 <b>Style Approved!</b>\n\nPreview saved to your library, and the remaining <b>${remaining} DNA variants</b> are now rendering!`
+              `🚀 <b>Style Approved!</b>\n\nPreview saved, and <b>${remaining} new DNA variants</b> are now rendering!`
             );
             return Response.json({ ok: true });
           }
