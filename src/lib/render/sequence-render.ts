@@ -1,35 +1,23 @@
-import {
-  planStartOffsets,
-  RenderCancelledError,
-  type HookPlacement,
-  type SeekOptions,
-} from "./browser-render";
-
-export { RenderCancelledError };
-export type { HookPlacement, SeekOptions };
-export { planStartOffsets };
-
 export interface SequenceSegment {
-  clipId?: string | undefined;
+  clipId?: string;
   url: string;
   sourceIn: number;
   sourceOut: number;
   speed: number;
-  role?: "start" | "middle" | "end" | string | undefined;
-  zoom?: number | undefined;
+  outputDuration: number;
+  zoom?: number;
 }
+
+export type HookPlacement = "top" | "middle" | "bottom";
 
 export interface SequenceRenderOptions {
   segments: SequenceSegment[];
-  durationSeconds?: number | undefined;
+  durationSeconds?: number;
   width: number;
   height: number;
   text: string;
   placement?: HookPlacement | undefined;
-  fontSize?: number | undefined;
-  textColor?: string | undefined;
-  backgroundColor?: string | undefined;
-  withAudio?: boolean | undefined;
+  withAudio?: boolean;
   soundtrackUrl?: string | null | undefined;
   soundtrackVolume?: number | undefined;
   onProgress?: (percent: number) => void;
@@ -44,8 +32,20 @@ export interface SequenceRenderResult {
   actualDuration: number;
 }
 
-function fontFor(size: number) {
-  return `900 ${size}px 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif`;
+export class RenderCancelledError extends Error {
+  constructor() {
+    super("Render was cancelled");
+    this.name = "RenderCancelledError";
+  }
+}
+
+interface PreparedSegment {
+  video: HTMLVideoElement;
+  sourceStart: number;
+  sourceEnd: number;
+  outputDuration: number;
+  speed: number;
+  zoom: number;
 }
 
 interface WrappedLine {
@@ -57,6 +57,10 @@ interface WrappedLine {
 interface OverlayLayout {
   lines: WrappedLine[];
   fontSize: number;
+}
+
+function fontFor(size: number) {
+  return `900 ${size}px 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif`;
 }
 
 function wrapText(
@@ -170,7 +174,6 @@ function drawOverlay(
 
   const strokeWidth = Math.max(6, Math.round(overlay.fontSize * 0.16));
 
-  // 1. Thick crisp black outline with subtle shadow
   ctx.lineWidth = strokeWidth;
   ctx.strokeStyle = "#000000";
   ctx.shadowColor = "rgba(0, 0, 0, 0.6)";
@@ -181,7 +184,6 @@ function drawOverlay(
     ctx.strokeText(line.text, line.x, line.y);
   }
 
-  // 2. Bold white fill on top
   ctx.shadowColor = "transparent";
   ctx.shadowBlur = 0;
   ctx.shadowOffsetY = 0;
@@ -212,12 +214,12 @@ function pickSupportedMimeType(): string {
   return "video/webm";
 }
 
-export function throwIfAborted(signal?: AbortSignal) {
+function throwIfAborted(signal?: AbortSignal) {
   if (signal?.aborted) throw new RenderCancelledError();
 }
 
 function waitFor(
-  el: HTMLMediaElement,
+  el: HTMLVideoElement,
   event: string,
   opts?: { signal?: AbortSignal | undefined; timeoutMs?: number },
 ) {
@@ -243,7 +245,7 @@ function waitFor(
       settled = true;
       cleanup();
       const errCode = el.error
-        ? ` (code ${el.error.code}: ${el.error.message || "media decode error"})`
+        ? ` (code ${el.error.code}: ${el.error.message || "media decode/network error"})`
         : "";
       reject(new Error(`Video failed to ${event}${errCode}. Check clip format or CORS permissions.`));
     };
@@ -274,7 +276,7 @@ function waitFor(
       (event === "loadedmetadata" && el.readyState >= 1) ||
       (event === "loadeddata" && el.readyState >= 2) ||
       (event === "canplay" && el.readyState >= 3) ||
-      (event === "seeked" && !("seeking" in el && (el as HTMLVideoElement).seeking) && el.readyState >= 2)
+      (event === "seeked" && !el.seeking && el.readyState >= 2)
     ) {
       ok();
       return;
@@ -284,9 +286,7 @@ function waitFor(
     el.addEventListener("error", fail, { once: true });
     opts?.signal?.addEventListener("abort", onAbort, { once: true });
 
-    // Only kick off loading if nothing has started yet — calling load() again
-    // resets the element and aborts in-progress downloads/seeks (Safari).
-    if (el.networkState === 0 /* NETWORK_EMPTY */) {
+    if (el.networkState === 0) {
       try {
         el.load();
       } catch {
@@ -294,15 +294,6 @@ function waitFor(
       }
     }
   });
-}
-
-interface PreparedSegment {
-  video: HTMLVideoElement;
-  sourceStart: number;
-  sourceEnd: number;
-  outputDuration: number;
-  speed: number;
-  zoom: number;
 }
 
 async function seekVideo(video: HTMLVideoElement, targetTime: number, signal?: AbortSignal): Promise<void> {
@@ -355,7 +346,11 @@ async function seekVideo(video: HTMLVideoElement, targetTime: number, signal?: A
   });
 }
 
-async function prepareVideo(seg: SequenceSegment, withAudio: boolean, signal?: AbortSignal): Promise<PreparedSegment> {
+async function prepareVideo(
+  seg: SequenceSegment,
+  withAudio: boolean,
+  signal?: AbortSignal,
+): Promise<PreparedSegment> {
   const video = document.createElement("video");
   video.crossOrigin = "anonymous";
   video.muted = !withAudio;
@@ -363,6 +358,7 @@ async function prepareVideo(seg: SequenceSegment, withAudio: boolean, signal?: A
   video.playsInline = true;
   video.preload = "auto";
   video.src = seg.url;
+
   try {
     video.load();
   } catch {
@@ -444,8 +440,6 @@ export async function renderSequence(opts: SequenceRenderOptions): Promise<Seque
 
   const drawCurrentFrame = (currentSeg: PreparedSegment) => {
     const v = currentSeg.video;
-    // While a clip is still seeking/decoding, keep the previous frame on the
-    // canvas instead of painting black — avoids the black cut between clips.
     if (v.seeking || v.readyState < 2) return;
     const vw = v.videoWidth || width;
     const vh = v.videoHeight || height;
@@ -503,50 +497,74 @@ export async function renderSequence(opts: SequenceRenderOptions): Promise<Seque
       window.AudioContext ||
       (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
 
-    if (AudioContextClass && soundtrackUrl) {
+    if (AudioContextClass && (withAudio || soundtrackUrl)) {
       audioCtx = new AudioContextClass();
       const dest = audioCtx.createMediaStreamDestination();
-      const audio = new Audio();
-      audio.crossOrigin = "anonymous";
-      audio.preload = "auto";
-      audio.src = soundtrackUrl;
-      audio.volume = Math.max(0, Math.min(1, opts.soundtrackVolume ?? 1));
-      soundtrackElement = audio;
+      let hasSource = false;
 
-      await new Promise<void>((resolve, reject) => {
-        const ok = () => {
-          cleanup();
-          resolve();
-        };
-        const fail = () => {
-          cleanup();
-          reject(new Error("Failed to load soundtrack."));
-        };
-        const timeout = setTimeout(() => {
-          cleanup();
-          reject(new Error("Timed out loading soundtrack."));
-        }, 20_000);
-        const cleanup = () => {
-          clearTimeout(timeout);
-          audio.removeEventListener("canplaythrough", ok);
-          audio.removeEventListener("error", fail);
-        };
-        audio.addEventListener("canplaythrough", ok, { once: true });
-        audio.addEventListener("error", fail, { once: true });
+      if (withAudio) {
+        prepared.forEach((p) => {
+          try {
+            const source = audioCtx!.createMediaElementSource(p.video);
+            source.connect(dest);
+            hasSource = true;
+          } catch (e) {
+            console.warn("Could not route segment audio:", e);
+          }
+        });
+      }
+
+      if (soundtrackUrl) {
         try {
-          audio.load();
-        } catch {
-          /* ignore */
-        }
-      });
+          const audio = new Audio();
+          audio.crossOrigin = "anonymous";
+          audio.preload = "auto";
+          audio.src = soundtrackUrl;
+          audio.volume = Math.max(0, Math.min(1, opts.soundtrackVolume ?? 1));
+          soundtrackElement = audio;
 
-      audio.currentTime = 0;
-      const trackSource = audioCtx.createMediaElementSource(audio);
-      trackSource.connect(dest);
-      dest.stream.getAudioTracks().forEach((t) => audioTracks.push(t));
+          await new Promise<void>((resolve, reject) => {
+            const ok = () => {
+              cleanup();
+              resolve();
+            };
+            const fail = () => {
+              cleanup();
+              reject(new Error("Failed to load soundtrack."));
+            };
+            const timeout = setTimeout(() => {
+              cleanup();
+              reject(new Error("Timed out loading soundtrack."));
+            }, 20_000);
+            const cleanup = () => {
+              clearTimeout(timeout);
+              audio.removeEventListener("canplaythrough", ok);
+              audio.removeEventListener("error", fail);
+            };
+            audio.addEventListener("canplaythrough", ok, { once: true });
+            audio.addEventListener("error", fail, { once: true });
+            try {
+              audio.load();
+            } catch {
+              /* ignore */
+            }
+          });
+
+          audio.currentTime = 0;
+          const trackSource = audioCtx.createMediaElementSource(audio);
+          trackSource.connect(dest);
+          hasSource = true;
+        } catch (soundtrackErr) {
+          console.warn("Could not bind soundtrack track; proceeding without it:", soundtrackErr);
+        }
+      }
+
+      if (hasSource) {
+        dest.stream.getAudioTracks().forEach((t) => audioTracks.push(t));
+      }
     }
   } catch (err) {
-    console.warn("Sequence audio setup failed:", err);
+    console.warn("Audio pipeline init failed; rendering video-only sequence:", err);
   }
 
   const combinedStream = new MediaStream([
@@ -572,8 +590,8 @@ export async function renderSequence(opts: SequenceRenderOptions): Promise<Seque
     let timer: number | null = null;
     let stopped = false;
     let segIdx = 0;
-    let segStartWallTime = 0;
-    let totalElapsedWallTime = 0;
+    let totalPlayedDuration = 0;
+    let switchingSeg = false;
 
     const stop = (err?: Error) => {
       if (stopped) return;
@@ -596,7 +614,7 @@ export async function renderSequence(opts: SequenceRenderOptions): Promise<Seque
             reject(err);
           } else {
             const blob = new Blob(chunks, { type: mimeType });
-            resolve({ blob, extension, mimeType, thumbnail, actualDuration: totalElapsedWallTime });
+            resolve({ blob, extension, mimeType, thumbnail, actualDuration: totalPlayedDuration });
           }
         };
         try {
@@ -609,7 +627,7 @@ export async function renderSequence(opts: SequenceRenderOptions): Promise<Seque
         reject(err);
       } else {
         const blob = new Blob(chunks, { type: mimeType });
-        resolve({ blob, extension, mimeType, thumbnail, actualDuration: totalElapsedWallTime });
+        resolve({ blob, extension, mimeType, thumbnail, actualDuration: totalPlayedDuration });
       }
     };
 
@@ -642,37 +660,41 @@ export async function renderSequence(opts: SequenceRenderOptions): Promise<Seque
     active.video.currentTime = active.sourceStart;
     active.video.playbackRate = active.speed;
     active.video.play().catch((e) => stop(e as Error));
+
     const preseek = (i: number) => {
       const nxt = prepared[i];
       if (nxt && nxt.video !== active.video) {
-        try { nxt.video.currentTime = nxt.sourceStart; } catch { /* ignore */ }
+        try {
+          nxt.video.currentTime = nxt.sourceStart;
+        } catch {
+          /* ignore */
+        }
       }
     };
     preseek(1);
 
-    segStartWallTime = performance.now();
-    const renderStartWallTime = segStartWallTime;
-
-    timer = window.setInterval(() => {
+    timer = window.setInterval(async () => {
       if (signal?.aborted) {
         stop(new RenderCancelledError());
         return;
       }
 
-      const now = performance.now();
-      totalElapsedWallTime = (now - renderStartWallTime) / 1000;
-      const segElapsed = (now - segStartWallTime) / 1000;
+      if (switchingSeg) return;
 
       drawCurrentFrame(active);
 
-      const progress = Math.min(100, Math.round((totalElapsedWallTime / totalDuration) * 100));
+      const currentVideoTime = active.video.currentTime;
+      const segPlayed = Math.max(0, (currentVideoTime - active.sourceStart) / active.speed);
+      const currentOverallTime = totalPlayedDuration + segPlayed;
+
+      const progress = Math.min(100, Math.round((currentOverallTime / totalDuration) * 100));
       opts.onProgress?.(progress);
 
-      const hitDuration = totalElapsedWallTime >= totalDuration;
+      const hitDuration = currentOverallTime >= totalDuration;
       const segFinished =
-        segElapsed >= active.outputDuration ||
-        active.video.currentTime >= active.sourceEnd ||
-        active.video.ended;
+        active.video.ended ||
+        currentVideoTime >= active.sourceEnd ||
+        segPlayed >= active.outputDuration;
 
       if (hitDuration) {
         stop();
@@ -680,24 +702,40 @@ export async function renderSequence(opts: SequenceRenderOptions): Promise<Seque
       }
 
       if (segFinished) {
+        switchingSeg = true;
         try {
           active.video.pause();
         } catch {
           /* ignore */
         }
 
+        totalPlayedDuration += active.outputDuration;
         segIdx++;
+
         if (segIdx >= prepared.length) {
           stop();
           return;
         }
 
-        active = prepared[segIdx]!;
-        active.video.currentTime = active.sourceStart;
-        active.video.playbackRate = active.speed;
-        segStartWallTime = performance.now();
-        active.video.play().catch((e) => stop(e as Error));
+        const next = prepared[segIdx]!;
+        active = next;
+
+        try {
+          await seekVideo(next.video, next.sourceStart, signal);
+        } catch {
+          /* ignore seek error fallback */
+        }
+
+        next.video.playbackRate = next.speed;
+        try {
+          await next.video.play();
+        } catch (e) {
+          stop(e as Error);
+          return;
+        }
+
         preseek(segIdx + 1);
+        switchingSeg = false;
       }
     }, intervalMs);
   });
