@@ -99,6 +99,9 @@ function ProjectWorkspace() {
   const [customQuantity, setCustomQuantity] = useState("8");
   const [live, setLive] = useState<BatchItem[]>([]);
   const [showJobHistory, setShowJobHistory] = useState(false);
+  const [selectMode, setSelectMode] = useState(false);
+  const [selectedVideos, setSelectedVideos] = useState<Set<string>>(new Set());
+  const [bulkBusy, setBulkBusy] = useState(false);
 
   // Same multi-clip rule as Studio: with 2+ clips selected, one batch is split
   // evenly across them (remainder randomly assigned). Defaults to every clip
@@ -200,7 +203,8 @@ function ProjectWorkspace() {
       const active = (q.state.data?.jobs ?? []).some(
         (j: { status: string }) => j.status === "queued" || j.status === "processing",
       );
-      return active ? 8000 : false;
+      // Idle polling catches renders started elsewhere (e.g. Telegram).
+      return active ? 3000 : 10000;
     },
   });
 
@@ -935,9 +939,117 @@ function ProjectWorkspace() {
             )}
           </div>
 
+          {(data?.videos.length ?? 0) > 0 ? (
+            <div className="flex flex-wrap items-center justify-end gap-2">
+              {selectMode ? (
+                <>
+                  <span className="mr-auto text-xs text-muted-foreground">
+                    {selectedVideos.size} selected
+                  </span>
+                  <Button
+                    size="sm"
+                    variant="secondary"
+                    onClick={() =>
+                      setSelectedVideos(
+                        selectedVideos.size === data!.videos.length
+                          ? new Set()
+                          : new Set(data!.videos.map((v) => v.id)),
+                      )
+                    }
+                  >
+                    {selectedVideos.size === data!.videos.length ? "Clear all" : "Select all"}
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="secondary"
+                    disabled={bulkBusy || selectedVideos.size === 0}
+                    onClick={async () => {
+                      setBulkBusy(true);
+                      try {
+                        for (const v of data!.videos.filter((x) => selectedVideos.has(x.id))) {
+                          if (!v.playbackUrl) continue;
+                          await downloadRender(
+                            v.playbackUrl,
+                            renderFilename(v.output_url, `hook-variant-${v.id.slice(0, 6)}`),
+                          );
+                          await new Promise((r) => setTimeout(r, 400));
+                        }
+                      } catch (e) {
+                        toast.error((e as Error).message);
+                      } finally {
+                        setBulkBusy(false);
+                      }
+                    }}
+                  >
+                    <Download className="size-3.5" />
+                    Download
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="destructive"
+                    disabled={bulkBusy || selectedVideos.size === 0}
+                    onClick={async () => {
+                      if (!window.confirm(`Delete ${selectedVideos.size} render(s) permanently?`)) return;
+                      setBulkBusy(true);
+                      try {
+                        for (const v of data!.videos.filter((x) => selectedVideos.has(x.id))) {
+                          await deleteRender(v);
+                        }
+                        toast.success("Renders deleted");
+                        setSelectedVideos(new Set());
+                        setSelectMode(false);
+                      } catch (e) {
+                        toast.error((e as Error).message);
+                      } finally {
+                        setBulkBusy(false);
+                        await qc.invalidateQueries({ queryKey: ["project", projectId] });
+                        await qc.invalidateQueries({ queryKey: ["studio-results"] });
+                      }
+                    }}
+                  >
+                    Delete
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    onClick={() => {
+                      setSelectMode(false);
+                      setSelectedVideos(new Set());
+                    }}
+                  >
+                    Cancel
+                  </Button>
+                </>
+              ) : (
+                <Button size="sm" variant="secondary" onClick={() => setSelectMode(true)}>
+                  Select
+                </Button>
+              )}
+            </div>
+          ) : null}
+
           <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
             {data?.videos.map((v) => (
-              <div key={v.id} className="panel space-y-3 p-4">
+              <div
+                key={v.id}
+                className={`panel relative space-y-3 p-4 ${selectMode && selectedVideos.has(v.id) ? "ring-2 ring-primary" : ""}`}
+              >
+                {selectMode ? (
+                  <input
+                    type="checkbox"
+                    aria-label="Select render"
+                    className="absolute right-6 top-6 z-10 size-5 accent-primary"
+                    checked={selectedVideos.has(v.id)}
+                    onChange={() =>
+                      setSelectedVideos((prev) => {
+                        const n = new Set(prev);
+                        if (n.has(v.id)) n.delete(v.id);
+                        else n.add(v.id);
+                        return n;
+                      })
+                    }
+                  />
+                ) : null}
                 <div className="overflow-hidden rounded-lg border border-border bg-black">
                   {v.playbackUrl ? (
                     <RenderPlayer src={v.playbackUrl} poster={v.posterUrl} />
