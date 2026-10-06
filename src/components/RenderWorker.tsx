@@ -58,14 +58,22 @@ export function RenderWorker() {
         }
 
         // 2. Mark as processing in database
-        await supabase
+        // Atomic claim: only the one tab whose update flips queued→processing
+        // renders. Other open tabs/devices get zero rows back and stay silent.
+        const { data: claimed } = await supabase
           .from("render_jobs")
           .update({
             status: "processing",
             progress: 5,
             started_at: new Date().toISOString(),
           })
-          .eq("id", job.id);
+          .eq("id", job.id)
+          .eq("status", "queued")
+          .select("id");
+        if (!claimed || claimed.length === 0) {
+          toast.dismiss(toastId);
+          return;
+        }
 
         toast.loading("Rendering video frames in browser...", { id: toastId });
 

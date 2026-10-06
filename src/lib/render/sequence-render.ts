@@ -444,6 +444,9 @@ export async function renderSequence(opts: SequenceRenderOptions): Promise<Seque
 
   const drawCurrentFrame = (currentSeg: PreparedSegment) => {
     const v = currentSeg.video;
+    // While a clip is still seeking/decoding, keep the previous frame on the
+    // canvas instead of painting black — avoids the black cut between clips.
+    if (v.seeking || v.readyState < 2) return;
     const vw = v.videoWidth || width;
     const vh = v.videoHeight || height;
 
@@ -639,6 +642,13 @@ export async function renderSequence(opts: SequenceRenderOptions): Promise<Seque
     active.video.currentTime = active.sourceStart;
     active.video.playbackRate = active.speed;
     active.video.play().catch((e) => stop(e as Error));
+    const preseek = (i: number) => {
+      const nxt = prepared[i];
+      if (nxt && nxt.video !== active.video) {
+        try { nxt.video.currentTime = nxt.sourceStart; } catch { /* ignore */ }
+      }
+    };
+    preseek(1);
 
     segStartWallTime = performance.now();
     const renderStartWallTime = segStartWallTime;
@@ -687,6 +697,7 @@ export async function renderSequence(opts: SequenceRenderOptions): Promise<Seque
         active.video.playbackRate = active.speed;
         segStartWallTime = performance.now();
         active.video.play().catch((e) => stop(e as Error));
+        preseek(segIdx + 1);
       }
     }, intervalMs);
   });
