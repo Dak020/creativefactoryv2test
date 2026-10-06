@@ -172,6 +172,33 @@ export const getAutoPickAudioFn = createServerFn({ method: "GET" })
   .inputValidator((input: { region?: string | undefined; excludeId?: string | undefined } | undefined) => input ?? {})
   .middleware([requireSupabaseAuth])
   .handler(async ({ data, context }) => {
+    // Auto-refresh the trending chart when it's older than 6h, so nobody has
+    // to press Sync manually. Best-effort: stale rows are still used on failure.
+    try {
+      const region = data.region ?? "global";
+      const { data: fresh } = await context.supabase
+        .from("trending_audios")
+        .select("last_synced_at")
+        .eq("region", region)
+        .eq("source", "apify")
+        .order("last_synced_at", { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      const last = fresh?.last_synced_at ? new Date(fresh.last_synced_at).getTime() : 0;
+      if (Date.now() - last > 6 * 60 * 60 * 1000) {
+        const { fetchTrendingSounds } = await import("@/lib/audio/tiktok-sounds.server");
+        const sounds = await fetchTrendingSounds(region, 40);
+        if (sounds.length > 0) {
+          await context.supabase.rpc("replace_trending_audios", {
+            _platform: "tiktok",
+            _region: region,
+            _rows: sounds as any,
+          });
+        }
+      }
+    } catch (e) {
+      console.warn("Auto trending sync skipped:", e);
+    }
     let q = context.supabase
       .from("trending_audios")
       .select(AUDIO_COLUMNS)
