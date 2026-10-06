@@ -6,29 +6,35 @@ import { renderSequence, type SequenceSegment } from "@/lib/render/sequence-rend
 import { RENDER_BUCKET, OUT_W, OUT_H } from "@/lib/render/pipeline";
 import { sendTelegramNotificationFn, sendTelegramPreviewFn } from "@/lib/telegram.functions";
 
-function blobToBase64(blob: Blob): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onloadend = () => {
-      const dataUrl = reader.result as string;
-      const base64 = dataUrl.split(",")[1];
-      if (!base64) {
-        reject(new Error("Failed to encode video blob to base64"));
-      } else {
-        resolve(base64);
-      }
-    };
-    reader.onerror = reject;
-    reader.readAsDataURL(blob);
-  });
-}
-
 export function RenderWorker() {
   const isProcessingRef = useRef(false);
   const processedJobsRef = useRef<Set<string>>(new Set());
+  const notifiedJobsRef = useRef<Set<string>>(new Set());
 
   useEffect(() => {
     let isMounted = true;
+    let wakeLockSentinel: any = null;
+
+    async function requestWakeLock() {
+      try {
+        if ("wakeLock" in navigator && (navigator as any).wakeLock) {
+          wakeLockSentinel = await (navigator as any).wakeLock.request("screen");
+        }
+      } catch {
+        /* Wake Lock is optional/unsupported on some mobile browsers */
+      }
+    }
+
+    async function releaseWakeLock() {
+      try {
+        if (wakeLockSentinel) {
+          await wakeLockSentinel.release();
+          wakeLockSentinel = null;
+        }
+      } catch {
+        /* ignore */
+      }
+    }
 
     async function processJob(jobId: string) {
       if (isProcessingRef.current || processedJobsRef.current.has(jobId)) {
@@ -39,6 +45,7 @@ export function RenderWorker() {
       processedJobsRef.current.add(jobId);
 
       const toastId = toast.loading("Background render worker starting...");
+      await requestWakeLock();
 
       try {
         // 1. Fetch job details
@@ -58,8 +65,7 @@ export function RenderWorker() {
         }
 
         // 2. Mark as processing in database
-        // Atomic claim: only the one tab whose update flips queued→processing
-        // renders. Other open tabs/devices get zero rows back and stay silent.
+        // Atomic claim: only the single tab that flips queued->processing renders
         const { data: claimed } = await supabase
           .from("render_jobs")
           .update({
@@ -70,6 +76,7 @@ export function RenderWorker() {
           .eq("id", job.id)
           .eq("status", "queued")
           .select("id");
+
         if (!claimed || claimed.length === 0) {
           toast.dismiss(toastId);
           return;
@@ -91,9 +98,7 @@ export function RenderWorker() {
         const isDna = (recipe.background_color ?? "").includes("dna");
         const targetDuration = recipe.duration && recipe.duration > 0 && recipe.duration <= 30 ? recipe.duration : 8;
 
-        // 3b. Fetch the audio/render hints this job was queued with (from the
-        //     Telegram bot or a future in-app queue). Absent hints = app-native
-        //     behavior: original clip audio, no soundtrack.
+        // 3b. Fetch audio/render hints
         const { data: hint } = await supabase
           .from("render_job_hints")
           .select("with_audio, soundtrack_url, audio_label, clip_ids, style")
@@ -113,14 +118,16 @@ export function RenderWorker() {
         const batchMatch = hint?.style?.match(/batch=(\d+)/);
         const batchTotal = batchMatch ? Math.max(1, parseInt(batchMatch[1]!, 10)) : 1;
 
-        // Notify Telegram that rendering has actively started
-        sendTelegramNotificationFn({
-          data: {
-            message: `⚙️ <b>Rendering started in browser!</b>\n\n• <b>Mode:</b> ${isDna ? "Clip DNA" : "Single Render"}\n• <b>Duration:</b> ${targetDuration}s\n• <b>Sound:</b> ${hint?.audio_label ?? "Original clip audio"}\n• <b>Hook:</b> "${recipe.overlay_text}"`,
-          },
-        }).catch(() => {});
+        // Notify Telegram once per job that rendering has started
+        if (!notifiedJobsRef.current.has(job.id)) {
+          notifiedJobsRef.current.add(job.id);
+          sendTelegramNotificationFn({
+            data: {
+              message: `⚙️ <b>Rendering started in browser!</b>\n\n• <b>Mode:</b> ${isDna ? "Clip DNA" : "Single Render"}\n• <b>Duration:</b> ${targetDuration}s\n• <b>Sound:</b> ${hint?.audio_label ?? "Original clip audio"}\n• <b>Hook:</b> "${recipe.overlay_text}"`,
+            },
+          }).catch(() => {});
+        }
 
-        // Map overlay position
         let placement: HookPlacement = "top";
         if (recipe.overlay_position === "center" || recipe.overlay_position === "middle") {
           placement = "middle";
@@ -131,9 +138,7 @@ export function RenderWorker() {
         let renderResult: { blob: Blob; extension: string; mimeType: string; thumbnail?: Blob | null | undefined };
 
         if (isDna) {
-          // --- CLIP DNA MULTI-CLIP RENDERING (app-identical solver) ---
-          // Pull the DNA-tagged clips for THIS project (the same ones the
-          // app's own DNA pipeline uses), signed and ready for the solver.
+          // --- CLIP DNA MULTI-CLIP RENDERING ---
           const { data: dnaRows, error: dnaErr } = await supabase
             .from("media_assets")
             .select("id, filename, duration, storage_path, dna_role, allowed_speeds, hook_placement, seek_mode, seek_seconds")
@@ -147,8 +152,6 @@ export function RenderWorker() {
             throw new Error("Need at least 2 DNA-tagged clips in this project for a Clip DNA render");
           }
 
-          // If Telegram queued specific clip ids, honor them; otherwise use
-          // every DNA-tagged clip in the project.
           const wanted = hint?.clip_ids?.length ? hint.clip_ids : dnaRows.map((r) => r.id);
           const chosen = dnaRows
             .filter((r) => wanted.includes(r.id))
@@ -169,7 +172,6 @@ export function RenderWorker() {
               storage_path: r.storage_path,
             }));
 
-          // Signed URLs for the solver clips
           const clips = await Promise.all(
             chosen.map(async (c) => {
               const { data: sData } = await supabase.storage.from("media").createSignedUrl(c.storage_path, 3600);
@@ -181,15 +183,10 @@ export function RenderWorker() {
             throw new Error("One or more DNA-tagged clips could not be read from storage");
           }
 
-          // Run the app's own deterministic DNA solver — same cuts, speeds and
-          // ordering the in-app DNA flow produces.
           const { planDna } = await import("@/lib/render/dna-pipeline");
           const planned = planDna(ready, targetDuration);
           if (!planned.ok) throw new Error(planned.reason);
 
-          // Persist the dna_recipe so the result is a real DNA record, not
-          // just a multi-clip render pretending to be one.
-          const opener = planned.plan.clipById[planned.plan.segments[0]!.media_asset_id]!;
           await supabase.from("dna_recipes").insert({
             user_id: job.user_id,
             project_id: job.project_id,
@@ -284,7 +281,6 @@ export function RenderWorker() {
           throw new Error(`Upload failed: ${uploadErr.message}`);
         }
 
-        // Upload thumbnail if available
         let thumbPath: string | null = null;
         if (thumbnail && thumbnail.size > 0) {
           thumbPath = `${job.user_id}/${job.id}.jpg`;
@@ -294,11 +290,9 @@ export function RenderWorker() {
           if (thumbErr) thumbPath = null;
         }
 
-        // 5. Save & Approval Handling (approved-batch variants auto-save):
+        // 5. Save & Approval Handling:
         if (isDna && !hint?.style?.includes("auto")) {
           // --- DNA Render: Keep as preview for Telegram approval ---
-          // NOT saved to generated_videos yet. Mark the job 'awaiting_approval'
-          // so it doesn't look finished, and don't flip status to 'completed'.
           await supabase
             .from("render_jobs")
             .update({
@@ -312,10 +306,6 @@ export function RenderWorker() {
 
           toast.success("DNA Preview ready! Sending to Telegram for approval...", { id: toastId });
 
-          // Send 9:16 preview with inline Approve & Discard buttons.
-          // The browser session is already authenticated, so we mint a
-          // short-lived signed URL here and Telegram streams the video
-          // directly from storage — no server-side buffering.
           try {
             const { data: signed, error: signErr } = await supabase.storage
               .from(RENDER_BUCKET)
@@ -342,7 +332,7 @@ export function RenderWorker() {
             );
           }
         } else {
-          // --- Single Render: Auto-save directly without requiring approval ---
+          // --- Single Render or auto-batch: Auto-save directly without approval ---
           await supabase.from("generated_videos").insert({
             user_id: job.user_id,
             project_id: job.project_id,
@@ -372,7 +362,7 @@ export function RenderWorker() {
 
           sendTelegramNotificationFn({
             data: {
-              message: `✅ <b>Single Render Complete!</b>\n\n• <b>Hook:</b> "${recipe.overlay_text}"\n• <b>Duration:</b> ${targetDuration}s\n\nAuto-saved to your project library and ready to schedule.`,
+              message: `✅ <b>Render Complete!</b>\n\n• <b>Hook:</b> "${recipe.overlay_text}"\n• <b>Duration:</b> ${targetDuration}s\n\nSaved to your project library and ready to schedule.`,
             },
           }).catch(() => {});
         }
@@ -397,6 +387,7 @@ export function RenderWorker() {
           },
         }).catch(() => {});
       } finally {
+        await releaseWakeLock();
         isProcessingRef.current = false;
         checkPendingJobs();
       }
@@ -447,6 +438,7 @@ export function RenderWorker() {
 
     return () => {
       isMounted = false;
+      releaseWakeLock();
       supabase.removeChannel(channel);
       clearInterval(interval);
     };
