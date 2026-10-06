@@ -452,7 +452,7 @@ export async function renderSequence(opts: SequenceRenderOptions): Promise<Seque
     const dw = vw * zoomScale;
     const dh = vh * zoomScale;
     const dx = (width - dw) / 2;
-    const dy = (height - dw) / 2;
+    const dy = (height - dh) / 2;
 
     ctx.fillStyle = "#000000";
     ctx.fillRect(0, 0, width, height);
