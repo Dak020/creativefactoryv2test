@@ -59,6 +59,16 @@ interface OverlayLayout {
   fontSize: number;
 }
 
+export function releaseVideoDecoder(video: HTMLVideoElement) {
+  try {
+    video.pause();
+    video.removeAttribute("src");
+    video.load(); // Forces mobile WebKit & Blink to immediately free the hardware decoder slot
+  } catch {
+    /* ignore */
+  }
+}
+
 function fontFor(size: number) {
   return `900 ${size}px 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif`;
 }
@@ -225,9 +235,11 @@ function waitFor(
 ) {
   return new Promise<void>((resolve, reject) => {
     let settled = false;
+    let kickTimer: any = null;
 
     const cleanup = () => {
       clearTimeout(timeout);
+      if (kickTimer) clearInterval(kickTimer);
       el.removeEventListener(event, ok);
       el.removeEventListener("error", fail);
       opts?.signal?.removeEventListener("abort", onAbort);
@@ -266,6 +278,22 @@ function waitFor(
         : ` (readyState: ${el.readyState}, networkState: ${el.networkState})`;
       reject(new Error(`Timed out waiting for the clip to ${event}${errDetail}. Verify the video codec is H.264 MP4.`));
     }, opts?.timeoutMs ?? (event === "loadedmetadata" ? 90_000 : 45_000));
+
+    // Stall-kick detector: If stuck in readyState 0 + networkState 2 for 5s, kick .load()
+    if (event === "loadedmetadata") {
+      let attempts = 0;
+      kickTimer = setInterval(() => {
+        if (settled) return;
+        if (el.readyState === 0 && el.networkState === 2 && attempts < 3) {
+          attempts++;
+          try {
+            el.load();
+          } catch {
+            /* ignore */
+          }
+        }
+      }, 5000);
+    }
 
     if (opts?.signal?.aborted) {
       onAbort();
@@ -386,12 +414,7 @@ async function prepareVideo(
       zoom: seg.zoom ?? 1,
     };
   } catch (err) {
-    try {
-      video.pause();
-      video.src = "";
-    } catch {
-      /* ignore */
-    }
+    releaseVideoDecoder(video);
     throw err;
   }
 }
@@ -429,9 +452,7 @@ export async function renderSequence(opts: SequenceRenderOptions): Promise<Seque
   canvas.height = height;
   const ctx = canvas.getContext("2d");
   if (!ctx) {
-    prepared.forEach((p) => {
-      p.video.src = "";
-    });
+    prepared.forEach((p) => releaseVideoDecoder(p.video));
     throw new Error("Canvas 2D context is not available.");
   }
 
@@ -479,7 +500,10 @@ export async function renderSequence(opts: SequenceRenderOptions): Promise<Seque
   const cleanupAudio = () => {
     try {
       soundtrackElement?.pause();
-      if (soundtrackElement) soundtrackElement.src = "";
+      if (soundtrackElement) {
+        soundtrackElement.removeAttribute("src");
+        soundtrackElement.load();
+      }
     } catch {
       /* ignore */
     }
@@ -598,14 +622,8 @@ export async function renderSequence(opts: SequenceRenderOptions): Promise<Seque
       stopped = true;
       if (timer !== null) clearInterval(timer);
 
-      prepared.forEach((p) => {
-        try {
-          p.video.pause();
-          p.video.src = "";
-        } catch {
-          /* ignore */
-        }
-      });
+      // Force release all native hardware decoders immediately
+      prepared.forEach((p) => releaseVideoDecoder(p.video));
       cleanupAudio();
 
       if (recorder.state !== "inactive") {
