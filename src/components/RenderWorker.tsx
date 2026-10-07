@@ -2,9 +2,34 @@ import { useEffect, useRef } from "react";
 import { toast } from "sonner";
 import { supabase } from "@/integrations/supabase/client";
 import { renderVariant, type HookPlacement } from "@/lib/render/browser-render";
-import { renderSequence, type SequenceSegment } from "@/lib/render/sequence-render";
+import { renderSequence, releaseVideoDecoder, type SequenceSegment } from "@/lib/render/sequence-render";
 import { RENDER_BUCKET, OUT_W, OUT_H } from "@/lib/render/pipeline";
 import { sendTelegramNotificationFn, sendTelegramPreviewFn } from "@/lib/telegram.functions";
+
+// In-memory cache of downloaded clip blobs so batch renders load instantly from RAM
+const clipBlobCache = new Map<string, string>();
+
+async function getCachedClipUrl(storagePath: string): Promise<string> {
+  const cached = clipBlobCache.get(storagePath);
+  if (cached) return cached;
+
+  const { data: sData, error: sErr } = await supabase.storage.from("media").createSignedUrl(storagePath, 3600);
+  if (sErr || !sData?.signedUrl) {
+    throw new Error(`Could not sign storage URL for ${storagePath}`);
+  }
+
+  try {
+    const res = await fetch(sData.signedUrl);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const blob = await res.blob();
+    const blobUrl = URL.createObjectURL(blob);
+    clipBlobCache.set(storagePath, blobUrl);
+    return blobUrl;
+  } catch (e) {
+    // Fallback directly to signed URL if fetch fails
+    return sData.signedUrl;
+  }
+}
 
 export function RenderWorker() {
   const isProcessingRef = useRef(false);
@@ -172,19 +197,16 @@ export function RenderWorker() {
               storage_path: r.storage_path,
             }));
 
+          // Load clips through memory-cached Blob URLs to prevent repeated range-request timeouts
           const clips = await Promise.all(
             chosen.map(async (c) => {
-              const { data: sData } = await supabase.storage.from("media").createSignedUrl(c.storage_path, 3600);
-              return sData?.signedUrl ? { ...c, url: sData.signedUrl } : null;
+              const url = await getCachedClipUrl(c.storage_path);
+              return { ...c, url };
             }),
           );
-          const ready = clips.filter((c): c is NonNullable<typeof c> => Boolean(c));
-          if (ready.length !== chosen.length) {
-            throw new Error("One or more DNA-tagged clips could not be read from storage");
-          }
 
           const { planDna } = await import("@/lib/render/dna-pipeline");
-          const planned = planDna(ready, targetDuration);
+          const planned = planDna(clips, targetDuration);
           if (!planned.ok) throw new Error(planned.reason);
 
           await supabase.from("dna_recipes").insert({
@@ -237,16 +259,10 @@ export function RenderWorker() {
             throw new Error(assetErr?.message || "Media asset clip not found");
           }
 
-          const { data: signData, error: signErr } = await supabase.storage
-            .from("media")
-            .createSignedUrl(asset.storage_path, 3600);
-
-          if (signErr || !signData?.signedUrl) {
-            throw new Error(signErr?.message || "Could not generate signed URL for media clip");
-          }
+          const sourceUrl = await getCachedClipUrl(asset.storage_path);
 
           renderResult = await renderVariant({
-            sourceUrl: signData.signedUrl,
+            sourceUrl,
             startSeconds: 0,
             durationSeconds: targetDuration,
             width: OUT_W,
