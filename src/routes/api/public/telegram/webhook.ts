@@ -2,6 +2,7 @@ import { createFileRoute } from "@tanstack/react-router";
 import { createClient } from "@supabase/supabase-js";
 import { timingSafeEqual } from "crypto";
 import { tg, sendText, answerCallback, botToken, botKey, webhookSecret, BOT_USERNAME } from "@/lib/telegram/bot.server";
+import { handleTelegramConversationalMessage } from "@/lib/telegram/va-agent.server";
 
 function esc(str: string | null | undefined): string {
   if (!str) return "";
@@ -159,7 +160,7 @@ export const Route = createFileRoute("/api/public/telegram/webhook")({
             await sendText(
               chatId,
               !error && ok
-                ? `✅ <b>Connected! I'm your Creative Factory VA.</b>\n\nType /render to start creating videos, or /help for all commands.`
+                ? `✅ <b>Connected! I'm your Creative Factory VA.</b>\n\nType /render to start creating videos, or talk to me naturally!`
                 : `❌ That link expired. Open Settings in the app and tap Connect Telegram again.`
             );
             return Response.json({ ok: true });
@@ -258,10 +259,33 @@ export const Route = createFileRoute("/api/public/telegram/webhook")({
               `• /projects - List your active projects\n` +
               `• /ping - Test connection & response speed (ms)\n` +
               `• /status, /clips, /trends, /schedule\n` +
-              `• /help - Show available commands`
+              `• /help - Show available commands\n\n` +
+              `💬 <i>Or talk to me naturally! E.g. "Render 3 DNA clips for Perfume with trending audio" or "Schedule my latest video for tomorrow 5pm"</i>`
             );
             return Response.json({ ok: true });
           }
+
+          // Conversational AI VA for natural language requests
+          const { data: link } = await db()
+            .from("telegram_links")
+            .select("user_id")
+            .eq("chat_id", chatId)
+            .maybeSingle();
+
+          if (!link?.user_id) {
+            await sendText(
+              chatId,
+              "👋 <b>Welcome!</b> To let me render and manage your videos, link your account first from Settings → Integrations in the web app."
+            );
+            return Response.json({ ok: true });
+          }
+
+          await handleTelegramConversationalMessage({
+            chatId,
+            userId: link.user_id,
+            text,
+            supabase: db(),
+          });
 
           return Response.json({ ok: true });
         }
@@ -286,7 +310,7 @@ export const Route = createFileRoute("/api/public/telegram/webhook")({
             return Response.json({ ok: true });
           }
 
-          // Step 1: Choose Style (Triggered by project selection or back button)
+          // Step 1: Choose Style
           if (data.startsWith("step_proj:") || data.startsWith("step_style:")) {
             const projectId = data.split(":")[1];
             await answerCallback(callbackId);
@@ -311,7 +335,7 @@ export const Route = createFileRoute("/api/public/telegram/webhook")({
             return Response.json({ ok: true });
           }
 
-          // Step 2: Choose Duration (Triggered by style selection: st:s:... or st:d:...)
+          // Step 2: Choose Duration
           if (data.startsWith("st:") || data.startsWith("step_dur:")) {
             const parts = data.split(":");
             const style = parts[1] === "d" ? "d" : "s";
@@ -329,7 +353,7 @@ export const Route = createFileRoute("/api/public/telegram/webhook")({
             return Response.json({ ok: true });
           }
 
-          // Step 3: Choose Batch Quantity (Triggered by duration selection: dur:s:8:... or dur:d:8:...)
+          // Step 3: Choose Batch Quantity
           if (data.startsWith("dur:") || data.startsWith("step_bat:")) {
             const parts = data.split(":");
             const style = parts[1] === "d" ? "d" : "s";
@@ -351,7 +375,7 @@ export const Route = createFileRoute("/api/public/telegram/webhook")({
             return Response.json({ ok: true });
           }
 
-          // Step 4: Choose Audio Soundtrack (Triggered by batch selection: bat:s:8:3:... or bat:d:8:3:...)
+          // Step 4: Choose Audio Soundtrack
           if (data.startsWith("bat:") || data.startsWith("step_aud:")) {
             const parts = data.split(":");
             const style = parts[1] === "d" ? "d" : "s";
@@ -404,7 +428,7 @@ export const Route = createFileRoute("/api/public/telegram/webhook")({
             return Response.json({ ok: true });
           }
 
-          // Execution Trigger (Triggered by audio selection: aud:style:duration:batch:projectId:audioChoice)
+          // Execution Trigger
           if (data.startsWith("aud:")) {
             const parts = data.split(":");
             const style = parts[1] === "d" ? "d" : "s";
@@ -429,7 +453,6 @@ export const Route = createFileRoute("/api/public/telegram/webhook")({
               .maybeSingle();
             const projectName = project?.name || "Project";
 
-            // Resolve audio parameters
             let withAudio = false;
             let soundtrackUrl: string | null = null;
             let audioLabel = "None";
@@ -469,7 +492,6 @@ export const Route = createFileRoute("/api/public/telegram/webhook")({
               }
             }
 
-            // Fetch Hooks & Clips for this project
             const [hooksRes, clipsRes] = await Promise.all([
               db().from("hooks").select("id, text").eq("project_id", projectId).order("created_at", { ascending: false }),
               db().from("media_assets").select("id, filename, duration, storage_path, dna_role").eq("project_id", projectId),
@@ -503,7 +525,6 @@ export const Route = createFileRoute("/api/public/telegram/webhook")({
               ? clips.find((c: { dna_role?: string | null }) => c.dna_role === "start") || clips[0]!
               : clips[0]!;
 
-            // Create primary video_recipe
             const { data: recipe, error: recErr } = await db()
               .from("video_recipes")
               .insert({
@@ -751,7 +772,7 @@ export const Route = createFileRoute("/api/public/telegram/webhook")({
             return Response.json({ ok: true });
           }
 
-          // Re-roll: cancel this preview and render a fresh random combination of the same recipe
+          // Re-roll preview
           if (data.startsWith("reroll:")) {
             const jobId = data.split(":")[1];
             await answerCallback(callbackId, "Re-rolling a new combination...");
